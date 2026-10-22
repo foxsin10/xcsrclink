@@ -1,2 +1,0 @@
-# LLDB init file for the DemoApp scheme (Edit Scheme > Run > Info > LLDB Init File).
-# `xcsrclink link ... --lldbinit DemoApp/xcsrclink.lldbinit` adds its block below.

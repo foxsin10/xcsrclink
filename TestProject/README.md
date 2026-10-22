@@ -13,8 +13,7 @@ TestProject/
 ├── DemoApp/
 │   ├── DemoApp.xcodeproj     iOS SwiftUI app linking all three
 │   ├── DemoApp/              ContentView.swift: one button per library
-│   ├── Frameworks/           built xcframeworks (generated, git-ignored)
-│   └── xcsrclink.lldbinit    the scheme's LLDB init file (Edit Scheme › Run › Info)
+│   └── Frameworks/           built xcframeworks (generated, git-ignored)
 └── scripts/
     ├── build-sdk.sh          builds the xcframeworks "on CI"
     └── verify.sh             automated simulator + lldb check of every strategy
@@ -50,20 +49,22 @@ xcsrclink info TestProject/DemoApp/Frameworks --files
 
 ## 3. Fix it
 
-The scheme reads `DemoApp/xcsrclink.lldbinit`, so point `xcsrclink` there to keep your
-`~/.lldbinit` untouched. From `TestProject/`:
+By default `xcsrclink` adds its mappings to `~/.lldbinit-Xcode` (if it exists) or
+`~/.lldbinit`, which Xcode reads for every debug session. From `TestProject/`:
 
 ```sh
 cd TestProject
 
 # All three libraries at once
-xcsrclink link DemoApp/Frameworks --source VendorSDK \
-  --name VendorSDK --lldbinit DemoApp/xcsrclink.lldbinit
+xcsrclink link DemoApp/Frameworks --source VendorSDK --name VendorSDK
 
 # ...or a single one. The link name defaults to the library name (here "DynamicKit").
-xcsrclink link DemoApp/Frameworks/DynamicKit.xcframework --source VendorSDK \
-  --lldbinit DemoApp/xcsrclink.lldbinit
+xcsrclink link DemoApp/Frameworks/DynamicKit.xcframework --source VendorSDK
 ```
+
+To keep your global lldbinit untouched, pass `--lldbinit DemoApp/xcsrclink.lldbinit` and
+set Edit Scheme › Run › Info › LLDB Init File to `$(SRCROOT)/xcsrclink.lldbinit`.
+`*.lldbinit` files in the repo are git-ignored, since they contain your local paths.
 
 Add `--dry-run` first to preview. The mapping it prints should end in `VendorSDK` on
 both sides:
@@ -125,8 +126,9 @@ In the debug console (⌘⇧Y) while paused:
   Quit and reopen Xcode, or run `settings clear target.source-map` and run again. Links
   made before xcsrclink capped mappings at `--source` covered all of `TestProject/`;
   relink with the current version.
-- **`target.source-map` is empty.** Check that Edit Scheme › Run › Info › LLDB Init File
-  is `$(SRCROOT)/xcsrclink.lldbinit`.
+- **`target.source-map` is empty.** Xcode didn't read the file you linked into. Check
+  which of `~/.lldbinit-Xcode` and `~/.lldbinit` you used (Xcode prefers the first if it
+  exists), or, with `--lldbinit`, that the scheme's LLDB Init File points to it.
 - **DynamicKit shows assembly.** Its dSYM wasn't found (`image list DynamicKit` shows no
   second line). Load it with
   `add-dsym TestProject/DemoApp/Frameworks/DynamicKit.xcframework/ios-arm64_x86_64-simulator/dSYMs/DynamicKit.framework.dSYM`.

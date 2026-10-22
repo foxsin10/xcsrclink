@@ -9,8 +9,7 @@
 #   - "step into" from the app lands in library source
 # The app is launched with -xcsrclink-autorun so it calls each library and exits by itself.
 #
-# Uses a temporary xcsrclink state folder and lldbinit, so ~/.lldbinit and the project's
-# DemoApp/xcsrclink.lldbinit are not touched. Set SIM_UDID to pick a simulator.
+# Uses a temporary xcsrclink state folder and lldbinit, so your ~/.lldbinit is not touched. Set SIM_UDID to pick a simulator.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"

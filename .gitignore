@@ -4,5 +4,10 @@
 /*.xcodeproj
 TestProject/build/
 TestProject/DemoApp/Frameworks/
+
+TestProject/DemoApp/*.lldbinit
+TestProject/*.lldbinit
+/*.lldbinit
+
 xcuserdata/
 .DS_Store
