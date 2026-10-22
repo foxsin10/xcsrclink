@@ -19,6 +19,17 @@ don't exist, so lldb can't show source or match your breakpoints to code.
 
 ## Install
 
+Prebuilt binary (Apple silicon + Intel): download `xcsrclink-<version>-macos-universal.tar.gz`
+from [Releases](https://github.com/foxsin10/xcsrclink/releases), then
+
+```sh
+tar xzf xcsrclink-*-macos-universal.tar.gz
+xattr -d com.apple.quarantine xcsrclink-*-macos-universal/xcsrclink   # if macOS blocks it
+install -m 755 xcsrclink-*-macos-universal/xcsrclink ~/.local/bin/
+```
+
+From source:
+
 ```sh
 make install                      # builds release and copies to ~/.local/bin/xcsrclink (no sudo)
 make install PREFIX=/opt/homebrew # or another folder you can write to
