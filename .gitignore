@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+.vscode/
+/*.xcodeproj
+TestProject/build/
+TestProject/DemoApp/Frameworks/
+xcuserdata/
+.DS_Store

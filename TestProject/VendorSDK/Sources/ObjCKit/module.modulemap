@@ -1,0 +1,4 @@
+module ObjCKit {
+    header "OCKCounter.h"
+    export *
+}
