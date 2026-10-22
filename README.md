@@ -181,3 +181,7 @@ prebuilt xcframeworks: a Swift `.a`, a Swift dynamic framework with a dSYM, and 
 Objective-C `.a`. They are built from a fake CI path. Open it in Xcode to watch
 breakpoints fail, run `xcsrclink link`, and watch them work. `verify.sh` does the same
 automatically in the iOS Simulator.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
