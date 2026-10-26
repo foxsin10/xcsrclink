@@ -107,8 +107,14 @@ public struct Linker {
         for m in mappings { console.info("  \(m.from)\n    -> \(m.to)") }
 
         var record = LinkRecord(
-            name: name, input: input, sourceRoot: sourceRoot, strategies: o.strategies, mappings: mappings,
-            createdAt: Date(), lldbinitPath: nil, inlineBreakpoints: o.inlineBreakpoints
+            name: name,
+            input: input,
+            sourceRoot: sourceRoot,
+            strategies: o.strategies,
+            mappings: mappings,
+            createdAt: Date(),
+            lldbinitPath: nil,
+            inlineBreakpoints: o.inlineBreakpoints
         )
 
         if o.strategies.contains(.patch) { try DWARFPatcher.validate(MappingResolver.widened(mappings)) }
