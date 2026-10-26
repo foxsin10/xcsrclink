@@ -195,16 +195,22 @@ Check what lldb loaded in Xcode's debug console (⌘⇧Y) while the app is pause
 - **"non-launching port is incompatible with service identifier ..."** and similar
   simulator messages are system log noise, unrelated to debugging.
 
-## Claude Code skill
+## Agent skill
 
-[`skills/xcsrclink`](skills/xcsrclink/SKILL.md) teaches Claude Code the workflow above
+[`skills/xcsrclink`](skills/xcsrclink/SKILL.md) teaches your agent the workflow above
 (inspect, pick `--source`, dry run, link, verify, troubleshoot), so it can set up source
 debugging when you say a vendor library's breakpoints don't bind. Install it for all your
-projects:
+projects with Claude for example:
 
 ```sh
 mkdir -p ~/.claude/skills
 ln -s "$PWD/skills/xcsrclink" ~/.claude/skills/xcsrclink   # from a clone of this repo
+```
+
+or via npx:
+
+```sh
+npx skills add https://github.com/foxsin10/xcsrclink/skills --skill xcsrclink
 ```
 
 Keep it in sync with the CLI: when a flag or behavior changes, update the skill too.
