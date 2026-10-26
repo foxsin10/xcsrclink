@@ -233,4 +233,94 @@ func makeFat(slices: [Data]) -> Data {
         try LLDBInit.write(block: nil, to: file)
         #expect(try String(contentsOfFile: file, encoding: .utf8) == "command alias pp po\n")
     }
+
+    @Test func deletesProjectFileLeftEmpty() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("lldbinit-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: file) }
+        let record = LinkRecord(name: "MyLib", input: "/x", sourceRoot: nil, strategies: [.lldbinit],
+                                mappings: [PathMapping(from: "/ci", to: "/me")], createdAt: Date(),
+                                lldbinitPath: file, inlineBreakpoints: false)
+        try LLDBInit.write(block: LLDBInit.render([record]), to: file)
+        try LLDBInit.write(block: nil, to: file)
+        #expect(!FileManager.default.fileExists(atPath: file))
+    }
+}
+
+@Suite struct LinkerInputTests {
+    @Test func missingInputIsReportedAsNotFound() {
+        var o = LinkOptions(input: "/nonexistent-\(UUID().uuidString)/Kit.xcframework")
+        o.sourceRoot = FileManager.default.temporaryDirectory.path
+        o.dryRun = true
+        #expect { try Linker().link(o) } throws: { ($0 as? LinkError)?.description.hasPrefix("not found:") == true }
+    }
+
+    @Test func missingSourceFolderIsReportedBeforeInspecting() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Kit-\(UUID().uuidString).framework").path
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        var o = LinkOptions(input: dir)
+        o.sourceRoot = "/nonexistent-\(UUID().uuidString)"
+        o.dryRun = true
+        #expect { try Linker().link(o) } throws: { ($0 as? LinkError)?.description.hasPrefix("source folder not found:") == true }
+    }
+}
+
+@Suite struct XcodeSchemeTests {
+    let scheme = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <Scheme
+       version = "1.3">
+       <TestAction
+          selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB">
+       </TestAction>
+       <LaunchAction
+          buildConfiguration = "Debug"
+          selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+          launchStyle = "0">
+       </LaunchAction>
+    </Scheme>
+
+    """
+
+    @Test func setsAndRemovesLLDBInitFileInRunActionOnly() throws {
+        let set = try #require(XcodeScheme.setting("$(SRCROOT)/x.lldbinit", in: scheme))
+        #expect(set.contains("""
+                  selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+                  customLLDBInitFile = "$(SRCROOT)/x.lldbinit"
+                  launchStyle = "0">
+            """))
+        #expect(set.components(separatedBy: "customLLDBInitFile").count == 2)
+        #expect(XcodeScheme.lldbInitFile(in: set) == .some("$(SRCROOT)/x.lldbinit"))
+        #expect(XcodeScheme.lldbInitFile(in: scheme) == .some(nil))
+        #expect(XcodeScheme.setting(nil, in: set) == scheme)
+    }
+
+    @Test func handlesSchemesWithoutRunActionOrLauncher() throws {
+        #expect(XcodeScheme.lldbInitFile(in: "<Scheme></Scheme>") == nil)
+        #expect(XcodeScheme.setting("a", in: "<Scheme></Scheme>") == nil)
+        let bare = "<Scheme>\n   <LaunchAction\n      launchStyle = \"0\">\n   </LaunchAction>\n</Scheme>\n"
+        let set = try #require(XcodeScheme.setting("a&b", in: bare))
+        #expect(set.contains("<LaunchAction\n      customLLDBInitFile = \"a&amp;b\"\n      launchStyle"))
+        #expect(XcodeScheme.lldbInitFile(in: set) == .some("a&b"))
+        #expect(XcodeScheme.setting(nil, in: set) == bare)
+    }
+
+    @Test func valueIsRelativeToSRCROOT() {
+        #expect(XcodeScheme.value(for: "/p/App/xcsrclink.lldbinit", projectDir: "/p/App") == "$(SRCROOT)/xcsrclink.lldbinit")
+        #expect(XcodeScheme.value(for: "/p/debug/x.lldbinit", projectDir: "/p/App") == "$(SRCROOT)/../debug/x.lldbinit")
+    }
+
+    @Test func findsSchemesOfNearestProject() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("schemes-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let shared = "\(root)/App/App.xcodeproj/xcshareddata/xcschemes"
+        try FileManager.default.createDirectory(atPath: shared, withIntermediateDirectories: true)
+        try scheme.write(toFile: "\(shared)/App.xcscheme", atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(atPath: "\(root)/App/debug", withIntermediateDirectories: true)
+
+        let found = try #require(XcodeScheme.find(near: "\(root)/App/debug/x.lldbinit"))
+        #expect(SourcePath(found.projectDir) == SourcePath("\(root)/App"))
+        #expect(found.schemes.map(XcodeScheme.name(of:)) == ["App"])
+        #expect(XcodeScheme.projectDir(ofScheme: "\(shared)/App.xcscheme").map(SourcePath.init) == SourcePath("\(root)/App"))
+    }
 }

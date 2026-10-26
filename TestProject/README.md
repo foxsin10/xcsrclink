@@ -62,8 +62,25 @@ xcsrclink link DemoApp/Frameworks --source VendorSDK --name VendorSDK
 xcsrclink link DemoApp/Frameworks/DynamicKit.xcframework --source VendorSDK
 ```
 
-To keep your global lldbinit untouched, pass `--lldbinit DemoApp/xcsrclink.lldbinit` and
-set Edit Scheme › Run › Info › LLDB Init File to `$(SRCROOT)/xcsrclink.lldbinit`.
+To keep your global lldbinit untouched, pass `--lldbinit DemoApp/xcsrclink.lldbinit`. It
+also sets the DemoApp scheme's Edit Scheme › Run › Info › LLDB Init File to
+`$(SRCROOT)/xcsrclink.lldbinit`, and `unlink` puts the scheme back.
+
+The scheme is found only when the Xcode project is in the lldbinit file's folder or a
+parent folder. For a file somewhere else, such as `VendorSDK/xcsrclink.lldbinit`, the
+project is in a sibling folder and no scheme is changed (you get a warning). Pass the
+scheme's path instead:
+
+```sh
+xcsrclink link DemoApp/Frameworks/DynamicKit.xcframework --source VendorSDK/Sources/DynamicKit \
+  --lldbinit VendorSDK/xcsrclink.lldbinit \
+  --scheme DemoApp/DemoApp.xcodeproj/xcshareddata/xcschemes/DemoApp.xcscheme
+```
+
+This sets the LLDB Init File to `$(SRCROOT)/../VendorSDK/xcsrclink.lldbinit`. Note that the
+repo's `.gitignore` only covers `*.lldbinit` in `TestProject/` and `TestProject/DemoApp/`,
+so a file in `VendorSDK/` would show up in `git status`. `DemoApp/xcsrclink.lldbinit`
+needs neither `--scheme` nor any `.gitignore` change.
 `*.lldbinit` files in the repo are git-ignored, since they contain your local paths.
 
 Add `--dry-run` first to preview. The mapping it prints should end in `VendorSDK` on
