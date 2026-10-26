@@ -120,7 +120,6 @@ xcsrclink link TestProject/DemoApp/Frameworks --source TestProject/VendorSDK --n
    from Finder) and click the gutter on a `// BREAKPOINT ...` line:
 
    | Library | File | Marker |
-
    |---|---|---|
    | StaticKit | `Greeter.swift`, `TextStyler.swift` | `BREAKPOINT StaticKit.greeting`, `.decorate` |
    | DynamicKit | `Calculator.swift`, `Stats.swift` | `BREAKPOINT DynamicKit.average`, `.sum` |
