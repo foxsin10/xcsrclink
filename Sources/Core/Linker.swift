@@ -30,6 +30,11 @@ public struct LinkOptions {
     public var inlineBreakpoints = true
     public var stripSignature = false
     public var dryRun = false
+    /// With an explicit `lldbinitPath`, point Xcode schemes' LLDB Init File at it.
+    public var editSchemes = true
+    /// Scheme names or `.xcscheme` paths to edit. Empty: every scheme of the project found
+    /// at or above the lldbinit file.
+    public var schemes: [String] = []
 
     public init(input: String) { self.input = input }
 }
@@ -51,6 +56,7 @@ public struct Linker {
     }
 
     public func inspect(_ input: String) throws -> Inspection {
+        try Self.requireExists(input)
         let located = DebugBinaryLocator.locate(input)
         var sources: [DebugBinary: [String]] = [:]
         for b in located.binaries {
@@ -59,12 +65,25 @@ public struct Linker {
         return Inspection(located: located, sources: sources)
     }
 
+    static func requireExists(_ input: String) throws {
+        let path = PathUtil.absolute(input)
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw LinkError("not found: \(path)")
+        }
+    }
+
     // MARK: - Link
 
     @discardableResult
     public func link(_ o: LinkOptions) throws -> LinkRecord {
         let input = PathUtil.absolute(o.input)
         let name = o.name ?? ((input as NSString).lastPathComponent as NSString).deletingPathExtension
+
+        // Check paths before touching an existing link, so a typo doesn't undo it.
+        try Self.requireExists(input)
+        if o.explicitMappings.isEmpty, let source = o.sourceRoot.map(PathUtil.absolute), !PathUtil.isDirectory(source) {
+            throw LinkError("source folder not found: \(source)")
+        }
 
         // Undo a previous link with this name first: a patched binary must be restored
         // before its paths are read again.
@@ -133,6 +152,9 @@ public struct Linker {
                 case .lldbinit: record.lldbinitPath = PathUtil.absolute(o.lldbinitPath ?? LLDBInit.defaultPath)
                 }
             }
+            if let path = record.lldbinitPath, o.lldbinitPath != nil, o.editSchemes {
+                try applySchemes(&record, lldbinit: path, only: o.schemes)
+            }
             registry.records.append(record)
             try registry.save()
             if let path = record.lldbinitPath {
@@ -140,6 +162,7 @@ public struct Linker {
                 console.info("Updated \(PathUtil.tildeAbbreviated(path)) (source-map for '\(name)')")
             }
         } catch {
+            revertSchemes(record.schemes ?? [])
             try? rollback(record)
             if var r = try? Registry.load(), r.records.contains(where: { $0.name == name }) {
                 r.records.removeAll { $0.name == name }
@@ -169,6 +192,92 @@ public struct Linker {
             var r = record
             r.lldbinitPath = path
             console.info("  would write to \(PathUtil.tildeAbbreviated(path)):\n" + (LLDBInit.render([r]) ?? ""))
+            if o.lldbinitPath != nil, o.editSchemes {
+                for t in try schemeTargets(lldbinit: path, only: o.schemes) {
+                    console.info("  would set LLDB Init File of scheme '\(XcodeScheme.name(of: t.scheme))' to \(t.value) (\(PathUtil.tildeAbbreviated(t.scheme)))")
+                }
+            }
+        }
+    }
+
+    // MARK: - Schemes
+
+    struct SchemeTarget { var scheme: String; var value: String }
+
+    func schemeTargets(lldbinit: String, only: [String]) throws -> [SchemeTarget] {
+        var targets: [SchemeTarget] = []
+        let paths = only.filter { $0.hasSuffix(".xcscheme") }
+        let names = only.filter { !$0.hasSuffix(".xcscheme") }
+        for p in paths.map(PathUtil.absolute) {
+            guard FileManager.default.fileExists(atPath: p) else { throw LinkError("scheme not found: \(p)") }
+            guard let dir = XcodeScheme.projectDir(ofScheme: p) else {
+                throw LinkError("\(p) is not inside an .xcodeproj or .xcworkspace")
+            }
+            targets.append(SchemeTarget(scheme: p, value: XcodeScheme.value(for: lldbinit, projectDir: dir)))
+        }
+        guard paths.isEmpty || !names.isEmpty else { return targets }
+
+        guard let found = XcodeScheme.find(near: lldbinit), !found.schemes.isEmpty else {
+            console.warn("""
+                no saved Xcode scheme found at or above \(PathUtil.tildeAbbreviated(lldbinit)), so no scheme was changed. \
+                Pass --scheme <path/to/Name.xcscheme>, or set Edit Scheme › Run › Info › LLDB Init File to this file yourself.
+                """)
+            return targets
+        }
+        var schemes = found.schemes
+        if !names.isEmpty {
+            schemes = schemes.filter { names.contains(XcodeScheme.name(of: $0)) }
+            let missing = Set(names).subtracting(schemes.map(XcodeScheme.name(of:)))
+            if !missing.isEmpty {
+                let available = found.schemes.map(XcodeScheme.name(of:)).joined(separator: ", ")
+                throw LinkError("no scheme named \(missing.sorted().joined(separator: ", ")) in \(found.projectDir). Found: \(available)")
+            }
+        }
+        let value = XcodeScheme.value(for: lldbinit, projectDir: found.projectDir)
+        targets += schemes.map { SchemeTarget(scheme: $0, value: value) }
+        return targets
+    }
+
+    private func applySchemes(_ record: inout LinkRecord, lldbinit: String, only: [String]) throws {
+        var edits: [SchemeEdit] = []
+        defer { record.schemes = edits.isEmpty ? nil : edits }
+        for t in try schemeTargets(lldbinit: lldbinit, only: only) {
+            let name = XcodeScheme.name(of: t.scheme)
+            let xml = try String(contentsOfFile: t.scheme, encoding: .utf8)
+            switch XcodeScheme.lldbInitFile(in: xml) {
+            case nil:
+                console.warn("scheme '\(name)' has no Run action, skipping it")
+            case .some(t.value)?:
+                console.info("Scheme '\(name)' already uses \(t.value)")
+            case .some(let other?):
+                console.warn("""
+                    scheme '\(name)' already uses LLDB Init File \(other), leaving it. \
+                    Add `command source \(PathUtil.tildeAbbreviated(lldbinit))` to that file instead.
+                    """)
+            case .some(nil):
+                guard let updated = XcodeScheme.setting(t.value, in: xml) else { continue }
+                try updated.write(toFile: t.scheme, atomically: true, encoding: .utf8)
+                edits.append(SchemeEdit(path: t.scheme, value: t.value))
+                console.info("Set LLDB Init File of scheme '\(name)' to \(t.value)")
+            }
+        }
+    }
+
+    /// Removes the LLDB Init File from these schemes, unless it was changed since.
+    private func revertSchemes(_ edits: [SchemeEdit]) {
+        for e in edits {
+            let name = XcodeScheme.name(of: e.path)
+            guard let xml = try? String(contentsOfFile: e.path, encoding: .utf8) else { continue }
+            guard case .some(e.value)? = XcodeScheme.lldbInitFile(in: xml) else {
+                console.warn("scheme '\(name)' no longer uses \(e.value), leaving it")
+                continue
+            }
+            guard let updated = XcodeScheme.setting(nil, in: xml),
+                  (try? updated.write(toFile: e.path, atomically: true, encoding: .utf8)) != nil else {
+                console.warn("couldn't update scheme '\(name)' at \(e.path)")
+                continue
+            }
+            console.info("Removed LLDB Init File from scheme '\(name)'")
         }
     }
 
@@ -288,7 +397,15 @@ public struct Linker {
         let record = registry.records[idx]
         try restore(record, force: force)
         registry.records.remove(at: idx)
+        // Schemes point at the lldbinit file, not at one library: keep them while another
+        // link still writes to that file, and hand them to it so its unlink reverts them.
+        var schemesToRevert = record.schemes ?? []
+        if !schemesToRevert.isEmpty, let other = registry.records.firstIndex(where: { $0.lldbinitPath == record.lldbinitPath }) {
+            registry.records[other].schemes = (registry.records[other].schemes ?? []) + schemesToRevert
+            schemesToRevert = []
+        }
         try registry.save()
+        revertSchemes(schemesToRevert)
         if let path = record.lldbinitPath {
             try refreshLLDBInit(path, registry: registry)
             console.info("Removed source-map for '\(name)' from \(PathUtil.tildeAbbreviated(path))")

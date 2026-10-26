@@ -49,7 +49,17 @@ public enum LLDBInit {
             text += block
         }
         if !text.isEmpty { text += "\n" }
-        if text.isEmpty && !FileManager.default.fileExists(atPath: path) { return }
+        if text.isEmpty {
+            guard FileManager.default.fileExists(atPath: path) else { return }
+            // An emptied project lldbinit is just clutter. Keep the home ones: whether
+            // ~/.lldbinit-Xcode exists decides which file Xcode reads.
+            let home = NSHomeDirectory() as NSString
+            let homeFiles = [".lldbinit", ".lldbinit-Xcode"].map { SourcePath(home.appendingPathComponent($0)) }
+            if !homeFiles.contains(SourcePath(PathUtil.absolute(path))) {
+                try FileManager.default.removeItem(atPath: path)
+                return
+            }
+        }
         try FileManager.default.createDirectory(
             atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         try text.write(toFile: path, atomically: true, encoding: .utf8)

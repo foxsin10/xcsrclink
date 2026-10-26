@@ -31,6 +31,8 @@ public struct LinkRecord: Codable, Sendable {
     public var createdDirectories: [String] = []
     /// `_CodeSignature` folders moved aside before patching a signed xcframework: original → backup.
     public var movedSignatures: [String: String] = [:]
+    /// Schemes whose LLDB Init File was set to `lldbinitPath`. Optional so older registries still load.
+    public var schemes: [SchemeEdit]?
 }
 
 public struct Registry: Codable {

@@ -28,7 +28,11 @@ LINK OPTIONS
                              patch     rewrite paths inside the .a/dSYM DWARF in place (backed up)
                              symlink   symlink the build paths to your source (cocoapods-imy-bin style)
   -n, --name <name>        Name for this link (default: library name)
-      --lldbinit <file>    lldbinit file to edit (default: ~/.lldbinit-Xcode if present, else ~/.lldbinit)
+      --lldbinit <file>    lldbinit file to edit (default: ~/.lldbinit-Xcode if present, else ~/.lldbinit).
+                           Also sets Run › LLDB Init File in the schemes of the Xcode project
+                           at or above <file>; unlink removes it again.
+      --scheme <name|path> Only edit this scheme (repeatable). A path to an .xcscheme also works.
+      --no-scheme          With --lldbinit, don't edit any scheme
       --no-inline-breakpoints
                            Don't set target.inline-breakpoint-strategy=always
       --strip-signature    Allow patching a signed xcframework (signature restored on unlink)
@@ -116,6 +120,8 @@ func runLink(_ args: Arguments) throws {
     o.inlineBreakpoints = !args.flags.contains("--no-inline-breakpoints")
     o.stripSignature = args.flags.contains("--strip-signature")
     o.dryRun = args.flags.contains("--dry-run")
+    o.editSchemes = !args.flags.contains("--no-scheme")
+    o.schemes = args.values["--scheme"] ?? []
     for m in args.values["--map"] ?? [] {
         guard let eq = m.firstIndex(of: "="), eq != m.startIndex, m.index(after: eq) != m.endIndex else {
             failWithMessage("--map expects OLD=NEW, got '\(m)'")
@@ -154,6 +160,7 @@ func runList() throws {
         print("\(r.name)  [\(r.strategies.map(\.rawValue).joined(separator: ","))]  \(PathUtil.tildeAbbreviated(r.input))")
         for m in r.mappings { print("    \(m.from) -> \(m.to)") }
         if let p = r.lldbinitPath { print("    lldbinit: \(PathUtil.tildeAbbreviated(p))") }
+        if let s = r.schemes, !s.isEmpty { print("    schemes: \(s.map { XcodeScheme.name(of: $0.path) }.joined(separator: ", "))") }
         if !r.patchedFiles.isEmpty { print("    patched: \(r.patchedFiles.count) file(s)") }
         if !r.symlinks.isEmpty { print("    symlinks: \(r.symlinks.joined(separator: ", "))") }
     }
@@ -165,7 +172,7 @@ do {
     let rest = Array(raw.dropFirst())
     switch command {
     case "info": try runInfo(Arguments(rest, valued: []))
-    case "link": try runLink(Arguments(rest, valued: ["--source", "--map", "--strategy", "--name", "--lldbinit"]))
+    case "link": try runLink(Arguments(rest, valued: ["--source", "--map", "--strategy", "--name", "--lldbinit", "--scheme"]))
     case "unlink": try runUnlink(Arguments(rest, valued: []))
     case "list": try runList()
     case "help", "-h", "--help": print(usage)

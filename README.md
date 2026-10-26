@@ -79,12 +79,31 @@ Strategies can be combined, e.g. `--strategy patch,lldbinit`.
 -s, --source <dir>        local checkout (paths are matched by their longest shared tail)
 -m, --map <old>=<new>     explicit mapping, repeatable (skips matching)
 -n, --name <name>         link name (default: library name)
-    --lldbinit <file>     lldbinit to edit, e.g. a per-project file set in the scheme's
-                          "LLDB Init File" field
+    --lldbinit <file>     lldbinit to edit instead of the global one, e.g. a per-project file.
+                          Also sets Run › Info › LLDB Init File to $(SRCROOT)/<file> in the
+                          schemes of the Xcode project at or above <file>
+    --scheme <name|path>  only edit this scheme, repeatable (a .xcscheme path also works)
+    --no-scheme           with --lldbinit, leave the schemes alone
     --no-inline-breakpoints  don't add target.inline-breakpoint-strategy=always
     --strip-signature     allow `patch` on a code-signed xcframework (signature restored on unlink)
     --dry-run             print what would change
 ```
+
+With `--lldbinit`, `unlink` removes the scheme setting again once no other link writes to
+that file, and deletes the file if nothing else is left in it. A scheme that already uses
+a different LLDB Init File is left alone; add `command source <file>` to that file instead.
+The project is searched for only in the lldbinit file's folder and its parents, not in
+sibling or child folders. For a file elsewhere, such as next to the library's source, pass
+the scheme's path; the value written is then relative, e.g. `$(SRCROOT)/../Vendor/x.lldbinit`:
+
+```Bash
+xcsrclink link Frameworks/MyLib.xcframework --source Vendor/MyLib --lldbinit Vendor/x.lldbinit \
+  --scheme App/App.xcodeproj/xcshareddata/xcschemes/App.xcscheme
+```
+
+The same applies if Xcode never saved the scheme (no `.xcscheme` file yet): pass `--scheme`
+with its path, or set the field by hand. The lldbinit file holds your local paths, so
+git-ignore it wherever you put it.
 
 ### How matching works
 
