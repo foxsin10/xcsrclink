@@ -70,20 +70,20 @@ struct Arguments {
         }
     }
 
-    func value(_ k: String) -> String? { values[k]?.last }
+    func value(ofKey k: String) -> String? { values[k]?.last }
 }
 
-func fail(_ message: String) -> Never {
+func failWithMessage(_ message: String) -> Never {
     FileHandle.standardError.write(Data("error: \(message)\n".utf8))
     exit(1)
 }
 
 func runInfo(_ args: Arguments) throws {
-    guard let path = args.positionals.first else { fail("usage: xcsrclink info <path> [--files]") }
+    guard let path = args.positionals.first else { failWithMessage("usage: xcsrclink info <path> [--files]") }
     let linker = Linker()
     let ins = try linker.inspect(path)
     ins.located.notes.forEach { print("note: \($0)") }
-    if ins.located.binaries.isEmpty { fail("no static libraries, dSYMs or DWARF found in \(path)") }
+    if ins.located.binaries.isEmpty { failWithMessage("no static libraries, dSYMs or DWARF found in \(path)") }
 
     let fm = FileManager.default
     for b in ins.located.binaries.sorted(by: { $0.path < $1.path }) {
@@ -108,21 +108,21 @@ func runInfo(_ args: Arguments) throws {
 }
 
 func runLink(_ args: Arguments) throws {
-    guard let path = args.positionals.first else { fail("usage: xcsrclink link <path> --source <dir> [options]") }
+    guard let path = args.positionals.first else { failWithMessage("usage: xcsrclink link <path> --source <dir> [options]") }
     var o = LinkOptions(input: path)
-    o.sourceRoot = args.value("--source")
-    o.name = args.value("--name")
-    o.lldbinitPath = args.value("--lldbinit")
+    o.sourceRoot = args.value(ofKey: "--source")
+    o.name = args.value(ofKey: "--name")
+    o.lldbinitPath = args.value(ofKey: "--lldbinit")
     o.inlineBreakpoints = !args.flags.contains("--no-inline-breakpoints")
     o.stripSignature = args.flags.contains("--strip-signature")
     o.dryRun = args.flags.contains("--dry-run")
     for m in args.values["--map"] ?? [] {
         guard let eq = m.firstIndex(of: "="), eq != m.startIndex, m.index(after: eq) != m.endIndex else {
-            fail("--map expects OLD=NEW, got '\(m)'")
+            failWithMessage("--map expects OLD=NEW, got '\(m)'")
         }
         o.explicitMappings.append(PathMapping(from: String(m[..<eq]), to: PathUtil.absolute(String(m[m.index(after: eq)...]))))
     }
-    if let list = args.value("--strategy") {
+    if let list = args.value(ofKey: "--strategy") {
         o.strategies = try list.split(separator: ",").map {
             let s = $0.trimmingCharacters(in: .whitespaces)
             guard let v = Strategy(rawValue: s) else {
@@ -143,7 +143,7 @@ func runUnlink(_ args: Arguments) throws {
         for n in names { try linker.unlink(name: n, force: force) }
         return
     }
-    guard !args.positionals.isEmpty else { fail("usage: xcsrclink unlink <name> | --all") }
+    guard !args.positionals.isEmpty else { failWithMessage("usage: xcsrclink unlink <name> | --all") }
     for n in args.positionals { try linker.unlink(name: n, force: force) }
 }
 
@@ -170,8 +170,8 @@ do {
     case "list": try runList()
     case "help", "-h", "--help": print(usage)
     case "--version", "version": print(version)
-    default: fail("unknown command '\(command)'. Run `xcsrclink help`.")
+    default: failWithMessage("unknown command '\(command)'. Run `xcsrclink help`.")
     }
 } catch {
-    fail("\(error)")
+    failWithMessage("\(error)")
 }
