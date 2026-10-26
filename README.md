@@ -66,6 +66,7 @@ including dSYMs shipped under `DebugSymbolsPath`.
 ### Strategies (`--strategy`, comma-separated)
 
 | Strategy | What it does | Breakpoints on your local files | Changes binaries | Notes |
+
 |---|---|---|---|---|
 | `lldbinit` (default) | Adds `settings append target.source-map <build> <local>` to `~/.lldbinit-Xcode` (if it exists) or `~/.lldbinit` | ✅ | No | Safest. Applies to every Xcode debug session. |
 | `patch` | Rewrites the paths inside the `.a` / dSYM DWARF in place, padding with `/` so no size or offset changes. Originals are backed up to `~/.xcsrclink/backups` | ✅ | Yes (restored on `unlink`) | No lldb config needed, so it also works for teammates if you commit the patched binary. The local path must be no longer than the build path. Rebuild after patching. |
@@ -133,6 +134,7 @@ file paths relative to a compile folder above the source folder, as clang does.)
 It depends on the kind of library:
 
 | Library | Works without a dSYM? | Why |
+
 |---|---|---|
 | Static library (`.a`, or an xcframework of `.a` files) | ✅ Yes | The debug info, with its source paths, is stored inside the `.a` itself. |
 | Dynamic framework (`.framework`, or an xcframework of frameworks) | ❌ No | When it's built, the debug info is either collected into a dSYM or left in temporary build files on the vendor's machine. Without the dSYM there are no source paths to map. |
@@ -194,6 +196,20 @@ Check what lldb loaded in Xcode's debug console (⌘⇧Y) while the app is pause
   `add-dsym /path/to/MyLib.framework.dSYM` and step in again.
 - **"non-launching port is incompatible with service identifier ..."** and similar
   simulator messages are system log noise, unrelated to debugging.
+
+## Claude Code skill
+
+[`skills/xcsrclink`](skills/xcsrclink/SKILL.md) teaches Claude Code the workflow above
+(inspect, pick `--source`, dry run, link, verify, troubleshoot), so it can set up source
+debugging when you say a vendor library's breakpoints don't bind. Install it for all your
+projects:
+
+```sh
+mkdir -p ~/.claude/skills
+ln -s "$PWD/skills/xcsrclink" ~/.claude/skills/xcsrclink   # from a clone of this repo
+```
+
+Keep it in sync with the CLI: when a flag or behavior changes, update the skill too.
 
 ## Development
 
