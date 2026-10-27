@@ -2,7 +2,8 @@
 
 An iOS app that uses three prebuilt vendor libraries, built so their debug info points at
 a CI machine path that doesn't exist on your Mac. Use it to watch the problem happen in
-Xcode, then fix it with `xcsrclink`.
+Xcode, then fix it with `xcsrclink`. `SPMDemo` is the same app getting the libraries
+through a Swift package; see [SwiftPM version](#swiftpm-version-spmdemo).
 
 ```Markdown
 TestProject/
@@ -14,9 +15,13 @@ TestProject/
 │   ├── DemoApp.xcodeproj     iOS SwiftUI app linking all three
 │   ├── DemoApp/              ContentView.swift: one button per library
 │   └── Frameworks/           built xcframeworks (generated, git-ignored)
+├── SPMDemo/
+│   ├── SPMDemo.xcodeproj     the same app (shares DemoApp/DemoApp/*.swift), libraries via SwiftPM
+│   └── VendorPackage/        local Swift package: the three libraries as binaryTargets
+│       └── Binaries/         StaticKit/DynamicKit zipped, ObjCKit as is (generated, git-ignored)
 └── scripts/
     ├── build-sdk.sh          builds the xcframeworks "on CI"
-    └── verify.sh             automated simulator + lldb check of every strategy
+    └── verify.sh             automated simulator + lldb check of every strategy (APP=SPMDemo for SPMDemo)
 ```
 
 Source lines worth breaking on are marked `// BREAKPOINT ...` in `VendorSDK`, and the
@@ -31,7 +36,8 @@ TestProject/scripts/build-sdk.sh
 This copies `VendorSDK/Sources` to
 `/tmp/xcsrclink-ci/buildkite-agent-07/workspace/ios-sdk-release/builds/job-48213`,
 compiles there with `-g` for device and simulator, writes the xcframeworks to
-`DemoApp/Frameworks`, and deletes the CI copy. Check what got recorded:
+`DemoApp/Frameworks` (and copies them into `SPMDemo/VendorPackage/Binaries`), and deletes
+the CI copy. Check what got recorded:
 
 ```sh
 xcsrclink info TestProject/DemoApp/Frameworks --files
@@ -86,7 +92,7 @@ needs neither `--scheme` nor any `.gitignore` change.
 Add `--dry-run` first to preview. The mapping it prints should end in `VendorSDK` on
 both sides:
 
-```Shell
+```sh
 /tmp/xcsrclink-ci/.../job-48213/VendorSDK
   -> .../TestProject/VendorSDK
 ```
@@ -127,6 +133,47 @@ xcsrclink link TestProject/DemoApp/Frameworks --source TestProject/VendorSDK --n
 
    Each works only for libraries you linked.
 
+## SwiftPM version (SPMDemo)
+
+`SPMDemo/SPMDemo.xcodeproj` is the same app (it compiles `DemoApp/DemoApp/*.swift`), but
+it gets the three libraries from a local Swift package, `SPMDemo/VendorPackage`, the way
+SDKs ship for SwiftPM:
+
+| Library | In `Package.swift` | Where Xcode builds it from |
+|---|---|---|
+| StaticKit, DynamicKit | `.binaryTarget(path: "Binaries/X.xcframework.zip")` | unpacked into `DerivedData/SPMDemo-<hash>/SourcePackages/artifacts/vendorpackage/X/`, as for a remote `url:` binary target |
+| ObjCKit | `.binaryTarget(path: "Binaries/ObjCKit.xcframework")` | used in place, from the package |
+
+`build-sdk.sh` fills `VendorPackage/Binaries`. Open the project, run **SPMDemo**, and set
+breakpoints as in [step 4](#4-step-into-the-library-in-xcode). To fix it, link both
+places. Find the DerivedData folder under Xcode › Settings › Locations, or with
+`ls -d ~/Library/Developer/Xcode/DerivedData/SPMDemo-*`:
+
+```sh
+cd TestProject
+xcsrclink link SPMDemo/VendorPackage/Binaries --source VendorSDK --name VendorBinaries
+xcsrclink link ~/Library/Developer/Xcode/DerivedData/SPMDemo-*/SourcePackages/artifacts \
+  --source VendorSDK --name VendorArtifacts
+```
+
+Or link one library at a time by passing its `.xcframework`. The link is named after it:
+
+```sh
+xcsrclink link SPMDemo/VendorPackage/Binaries/ObjCKit.xcframework --source VendorSDK
+A=$(ls -d ~/Library/Developer/Xcode/DerivedData/SPMDemo-*/SourcePackages/artifacts/vendorpackage)
+xcsrclink link $A/StaticKit/StaticKit.xcframework --source VendorSDK
+xcsrclink link $A/DynamicKit/DynamicKit.xcframework --source VendorSDK
+xcsrclink unlink StaticKit   # just that one
+```
+
+Linking `VendorPackage/Binaries` as a folder covers only ObjCKit: the `.zip` files there
+aren't read, so StaticKit and DynamicKit always come from the unpacked copies.
+
+All links can share one per-project lldbinit: add `--lldbinit SPMDemo/xcsrclink.lldbinit`
+to each, and the SPMDemo scheme is pointed at it. `patch` works too and survives normal
+rebuilds. When Xcode unpacks the zips again (after Reset Package Caches, or a new
+version of the package), the original binaries come back and you need to relink.
+
 ## Troubleshooting
 
 In the debug console (⌘⇧Y) while paused:
@@ -156,6 +203,7 @@ In the debug console (⌘⇧Y) while paused:
 
 ```sh
 TestProject/scripts/verify.sh            # SIM_UDID=<udid> to choose a simulator, KEEP=1 to keep lldb logs
+APP=SPMDemo TestProject/scripts/verify.sh  # the same checks for the SwiftPM version
 ```
 
 For the baseline and each strategy, the script builds the app with `xcodebuild` and
@@ -164,7 +212,9 @@ once and exit. It attaches lldb the way Xcode does, then checks that breakpoints
 three libraries stop with source shown and that stepping into `Calculator.average`
 lands in source. The app breakpoint is set by its full path, as Xcode does, so a mapping
 that wrongly covers the app's own files fails the check. It also checks that `unlink`
-restores everything.
+restores everything, and that a rebuild keeps the patched libraries. For SPMDemo it links
+`VendorPackage/Binaries` and the `SourcePackages/artifacts` of its own DerivedData
+(`TestProject/build-spm`).
 
 ## Notes on the setup
 

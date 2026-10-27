@@ -246,6 +246,24 @@ func makeFat(slices: [Data]) -> Data {
     }
 }
 
+@Suite struct CanonicalCaseTests {
+    @Test func fixesLetterCaseOnlyAndKeepsSymlinks() throws {
+        let fm = FileManager.default
+        var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
+        // Resolve the temp folder itself first (/var -> /private/var) so only our parts vary.
+        let tmp = String(cString: realpath(fm.temporaryDirectory.path, &buf))
+        let root = "\(tmp)/Case-\(UUID().uuidString)"
+        defer { try? fm.removeItem(atPath: root) }
+        try fm.createDirectory(atPath: "\(root)/Real/Sub", withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: "\(root)/link", withDestinationPath: "\(root)/Real")
+        guard fm.fileExists(atPath: "\(root)/REAL") else { return } // case-sensitive volume
+
+        #expect(PathUtil.canonicalCase("\(root)/real/SUB") == "\(root)/Real/Sub")
+        #expect(PathUtil.canonicalCase("\(root)/link/Sub") == "\(root)/link/Sub")
+        #expect(PathUtil.canonicalCase("\(root)/missing") == "\(root)/missing")
+    }
+}
+
 @Suite struct LinkerInputTests {
     @Test func missingInputIsReportedAsNotFound() {
         var o = LinkOptions(input: "/nonexistent-\(UUID().uuidString)/Kit.xcframework")

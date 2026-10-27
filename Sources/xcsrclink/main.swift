@@ -52,7 +52,12 @@ struct Arguments {
 
     static let aliases = ["-s": "--source", "-m": "--map", "-S": "--strategy", "-n": "--name", "-h": "--help"]
 
-    init(_ raw: [String], valued: Set<String>) throws {
+    /// `valued` options take a value, `flags` don't. Anything else is an error, so a typo
+    /// like `----lldbinit` stops the command instead of being silently ignored.
+    /// `maxPositionals` (nil: any number) catches stray arguments such as a value whose
+    /// option was misspelled.
+    init(_ raw: [String], valued: Set<String> = [], flags known: Set<String> = [], maxPositionals: Int? = nil) throws {
+        let known = known.union(["--help"])
         var i = 0
         while i < raw.count {
             var arg = raw[i]
@@ -68,10 +73,41 @@ struct Arguments {
                 guard let v = inline ?? (i < raw.count ? raw[i] : nil) else { throw LinkError("\(arg) needs a value") }
                 if inline == nil { i += 1 }
                 values[arg, default: []].append(v)
-            } else {
+            } else if known.contains(arg), inline == nil {
                 flags.insert(arg)
+            } else if known.contains(arg) {
+                throw LinkError("\(arg) takes no value")
+            } else {
+                let hint = Arguments.closest(to: arg, in: valued.union(known)).map { ". Did you mean \($0)?" } ?? ""
+                throw LinkError("unknown option '\(arg)'\(hint) See `xcsrclink help`.")
             }
         }
+        if let max = maxPositionals, positionals.count > max, !flags.contains("--help") {
+            throw LinkError("unexpected argument '\(positionals[max])'. Is the option before it misspelled?")
+        }
+    }
+
+    /// The known option nearest to a misspelled one (extra dashes, a typo or two).
+    static func closest(to arg: String, in options: Set<String>) -> String? {
+        let bare = arg.drop { $0 == "-" }
+        if let exact = options.first(where: { $0.drop { $0 == "-" } == bare }) { return exact }
+        let scored = options.map { ($0, editDistance(Array(bare), Array($0.drop { $0 == "-" }))) }
+        guard let best = scored.min(by: { $0.1 < $1.1 || ($0.1 == $1.1 && $0.0 < $1.0) }), best.1 <= 2 else { return nil }
+        return best.0
+    }
+
+    static func editDistance(_ a: [Character], _ b: [Character]) -> Int {
+        var row = Array(0...b.count)
+        for (i, ca) in a.enumerated() {
+            var prev = row[0]
+            row[0] = i + 1
+            for (j, cb) in b.enumerated() {
+                let cur = row[j + 1]
+                row[j + 1] = min(row[j + 1] + 1, row[j] + 1, prev + (ca == cb ? 0 : 1))
+                prev = cur
+            }
+        }
+        return row[b.count]
     }
 
     func value(ofKey k: String) -> String? { values[k]?.last }
@@ -171,10 +207,24 @@ guard let command = raw.first else { print(usage); exit(0) }
 do {
     let rest = Array(raw.dropFirst())
     switch command {
-    case "info": try runInfo(Arguments(rest, valued: []))
-    case "link": try runLink(Arguments(rest, valued: ["--source", "--map", "--strategy", "--name", "--lldbinit", "--scheme"]))
-    case "unlink": try runUnlink(Arguments(rest, valued: []))
-    case "list": try runList()
+    case "info", "link", "unlink", "list":
+        let args: Arguments
+        switch command {
+        case "info": args = try Arguments(rest, flags: ["--files"], maxPositionals: 1)
+        case "link":
+            args = try Arguments(rest, valued: ["--source", "--map", "--strategy", "--name", "--lldbinit", "--scheme"],
+                                 flags: ["--no-inline-breakpoints", "--strip-signature", "--dry-run", "--no-scheme"],
+                                 maxPositionals: 1)
+        case "unlink": args = try Arguments(rest, flags: ["--force", "--all"])
+        default: args = try Arguments(rest, maxPositionals: 0)
+        }
+        if args.flags.contains("--help") { print(usage); exit(0) }
+        switch command {
+        case "info": try runInfo(args)
+        case "link": try runLink(args)
+        case "unlink": try runUnlink(args)
+        default: try runList()
+        }
     case "help", "-h", "--help": print(usage)
     case "--version", "version": print(version)
     default: failWithMessage("unknown command '\(command)'. Run `xcsrclink help`.")

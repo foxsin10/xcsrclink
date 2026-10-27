@@ -63,6 +63,48 @@ xcsrclink unlink MyLib    # undo everything for that library
 them (`Pods/`, `Carthage/Build/`, ...). Inside an xcframework every slice is handled,
 including dSYMs shipped under `DebugSymbolsPath`.
 
+### Swift Package Manager binary targets
+
+Libraries from `.binaryTarget` work the same way. Point `xcsrclink` at the xcframework
+SwiftPM actually builds against:
+
+| How the package declares it | Where the xcframework is |
+|---|---|
+| `.binaryTarget(path: "X.xcframework")` | at that path in the package. In a remote dependency: `.build/checkouts/<package>/...` |
+| `.binaryTarget(url:checksum:)` or `path:` to a `.zip` | unpacked into `.build/artifacts/<package>/<target>/X.xcframework` |
+| Same, in an Xcode project | `DerivedData/<App>-<hash>/SourcePackages/artifacts/...` and `.../SourcePackages/checkouts/...` |
+
+Link one binary target by passing its `.xcframework`; the link is named after it, so
+`unlink` can undo it alone. Zipped targets are linked through their unpacked copy (the
+`.zip` itself isn't read):
+
+```sh
+# a path: target, used where it is
+xcsrclink link Vendor/Binaries/ObjCKit.xcframework --source ~/src/VendorSDK
+
+# a url: or zipped target, unpacked by Xcode
+A=$(ls -d ~/Library/Developer/Xcode/DerivedData/MyApp-*/SourcePackages/artifacts/vendorpackage)
+xcsrclink link $A/StaticKit/StaticKit.xcframework --source ~/src/VendorSDK
+xcsrclink link $A/DynamicKit/DynamicKit.xcframework --source ~/src/VendorSDK
+
+xcsrclink unlink StaticKit    # undoes only that one
+```
+
+Or link every binary target at once with a folder. Folder scans look inside
+`.build/artifacts` and `.build/checkouts` and skip the rest of `.build`, so the package
+root works too:
+
+```sh
+xcsrclink link .build/artifacts --source ~/src/VendorSDK --name VendorSDK
+```
+
+Prefer `lldbinit` here. `patch` works and survives normal rebuilds, but SwiftPM throws
+the patched copy away when it unpacks the archive again (Reset Package Caches,
+`swift package reset`, a new version), and for a `path:` target in your repo it changes
+a file under version control. A dynamic framework's dSYM is copied next to the framework
+in the build products, so lldb finds it on its own. [`TestProject/SPMDemo`](TestProject/README.md#swiftpm-version-spmdemo)
+is an iOS app set up this way.
+
 ### Strategies (`--strategy`, comma-separated)
 
 | Strategy | What it does | Breakpoints on your local files | Changes binaries | Notes |
@@ -88,6 +130,9 @@ Strategies can be combined, e.g. `--strategy patch,lldbinit`.
     --strip-signature     allow `patch` on a code-signed xcframework (signature restored on unlink)
     --dry-run             print what would change
 ```
+
+A misspelled option stops the command (`unknown option '----lldbinit'. Did you mean
+--lldbinit?`) instead of being ignored.
 
 With `--lldbinit`, `unlink` removes the scheme setting again once no other link writes to
 that file, and deletes the file if nothing else is left in it. A scheme that already uses
@@ -157,6 +202,9 @@ with its debug info stripped, has nothing to map either.
   [Does it need a dSYM?](#does-it-need-a-dsym) for which libraries need a dSYM.
 - Your checkout should match the commit the binary was built from, or line numbers
   will drift.
+- Paths you pass are stored with the file system's spelling: `~/workspace/App` becomes
+  `~/Workspace/App` if that is the real folder name. lldb compares paths
+  case-sensitively, so a mapping spelled differently from what Xcode uses never matches.
 - `patch` on an xcframework changes files Xcode copies into DerivedData, so rebuild
   afterwards. If the vendor ships a new binary, `unlink` won't overwrite it (checksums
   are compared; `--force` overrides).
@@ -221,7 +269,8 @@ Keep it in sync with the CLI: when a flag or behavior changes, update the skill 
 make install           # rebuild and reinstall after changes
 swift test             # unit tests (path matching, Mach-O/archive parsing, patcher, lldbinit)
 scripts/e2e.sh         # builds real Swift libraries/xcframeworks and checks every strategy with lldb
-TestProject/scripts/verify.sh   # iOS app + simulator check, see below
+scripts/e2e-spm.sh     # same, consumed through SwiftPM binaryTargets (path, zip, dynamic + dSYM)
+TestProject/scripts/verify.sh   # iOS app + simulator check, see below (APP=SPMDemo: the SwiftPM version)
 ```
 
 ### Test project
@@ -229,7 +278,8 @@ TestProject/scripts/verify.sh   # iOS app + simulator check, see below
 [`TestProject/`](TestProject/README.md) holds an iOS SwiftUI app that uses three
 prebuilt xcframeworks: a Swift `.a`, a Swift dynamic framework with a dSYM, and an
 Objective-C `.a`. They are built from a fake CI path. Open it in Xcode to watch
-breakpoints fail, run `xcsrclink link`, and watch them work. `verify.sh` does the same
+breakpoints fail, run `xcsrclink link`, and watch them work. `SPMDemo` is the same app
+getting the libraries through a Swift package's binary targets. `verify.sh` does the same
 automatically in the iOS Simulator.
 
 ## License

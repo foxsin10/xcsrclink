@@ -10,6 +10,10 @@
 #   ObjCKit.xcframework     Objective-C static library (.a + headers + modulemap)
 #
 # Each has an iOS device slice and an iOS simulator slice (arm64 + x86_64).
+#
+# The same xcframeworks also go into SPMDemo/VendorPackage/Binaries for the SwiftPM demo:
+# StaticKit and DynamicKit zipped (SwiftPM unpacks them into its artifacts folder, like a
+# remote binary target), ObjCKit as a plain folder.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -129,9 +133,16 @@ for kit in StaticKit DynamicKit ObjCKit; do
   xcodebuild -create-xcframework "${args[@]}" -output "$OUT/$kit.xcframework" >/dev/null
 done
 
+PKG_BIN="$HERE/SPMDemo/VendorPackage/Binaries"
+rm -rf "$PKG_BIN" && mkdir -p "$PKG_BIN"
+for kit in StaticKit DynamicKit; do
+  (cd "$OUT" && ditto -c -k --keepParent "$kit.xcframework" "$PKG_BIN/$kit.xcframework.zip")
+done
+cp -R "$OUT/ObjCKit.xcframework" "$PKG_BIN/"
+
 echo "Deleting the CI copy (the binaries now reference missing paths)"
 rm -rf "$CI_ROOT"
 # Remove the now-empty parent folders too (rmdir only removes empty ones).
 d="$(dirname "$CI_ROOT")"; while rmdir "$d" 2>/dev/null; do d="$(dirname "$d")"; done
 echo "Done:"
-ls -1d "$OUT"/*.xcframework
+ls -1d "$OUT"/*.xcframework "$PKG_BIN"/*

@@ -75,7 +75,18 @@ public enum PathUtil {
         let url = expanded.hasPrefix("/")
             ? URL(fileURLWithPath: expanded)
             : URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(expanded)
-        return SourcePath(url.standardized.path).string
+        return canonicalCase(SourcePath(url.standardized.path).string)
+    }
+
+    /// The path as the file system spells it, e.g. `~/workspace/App` → `~/Workspace/App` on a
+    /// case-insensitive volume. Compilers record the real spelling and lldb compares paths
+    /// case-sensitively, so a mapping to a differently cased path never matches. Only the
+    /// letter case changes: symlinks (and `/private`) are kept as given.
+    static func canonicalCase(_ path: String) -> String {
+        var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
+        guard realpath(path, &buf) != nil else { return path }
+        let real = String(cString: buf)
+        return real != path && real.caseInsensitiveCompare(path) == .orderedSame ? real : path
     }
 
     /// Paths that belong to Xcode, SDKs or the compiler rather than the library's own sources.

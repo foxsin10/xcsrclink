@@ -4,8 +4,11 @@
 /*.xcodeproj
 TestProject/build/
 TestProject/DemoApp/Frameworks/
+TestProject/SPMDemo/VendorPackage/Binaries/
+TestProject/build-spm/
 
 TestProject/DemoApp/*.lldbinit
+TestProject/SPMDemo/*.lldbinit
 TestProject/*.lldbinit
 /*.lldbinit
 

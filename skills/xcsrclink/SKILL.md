@@ -12,6 +12,7 @@ A library built with `-g` records the absolute **build paths** of its sources on
 1. **Check the tool.** `xcsrclink --version`. If missing: download the universal tarball from https://github.com/foxsin10/xcsrclink/releases and `install -m 755 .../xcsrclink ~/.local/bin/`, or `make install` from a clone. Requires macOS 13+ and Xcode.
 
 2. **Inspect the library.** `xcsrclink info <path> --files`, where `<path>` is the `.xcframework`, `.framework`, `.a`, `.dSYM`, or a folder of them (`Pods/`, `Carthage/Build/`). Done when it lists source files and their build roots.
+   - SwiftPM `binaryTarget`: a `path:` xcframework is at that path; `url:` and zipped ones are unpacked into `.build/artifacts/<package>/<target>/` (Xcode: `DerivedData/<App>-<hash>/SourcePackages/artifacts/`); remote packages' files are in `.build/checkouts/`. The package root works as `<path>` too, and a single target's `.xcframework` links just that one (see Examples). `.zip` files aren't read: use the unpacked copy. Prefer the `lldbinit` strategy: SwiftPM discards a patched copy when it unpacks again.
    - "no source paths" or "dynamic framework with no dSYM": there is nothing to map. A static `.a` carries its own debug info; a dynamic framework needs the dSYM of that exact build (matched by UUID). Tell the user to get the dSYM from the vendor or rebuild with `-g`, and stop.
    - "not found": the path is wrong. Locate the library (`find . -name '*.xcframework'`) before going on.
 
@@ -53,6 +54,21 @@ xcsrclink link DemoApp/Frameworks/DynamicKit.xcframework --source VendorSDK/Sour
 ```
 
 `xcsrclink unlink DynamicKit` reverts either one: mappings, the scheme setting, and the emptied lldbinit file.
+
+SwiftPM, one binary target at a time (the `SPMDemo/` app; `VendorPackage` ships StaticKit and DynamicKit zipped, ObjCKit as a folder). Pass the target's `.xcframework`: a `path:` one where it is, a zipped or `url:` one from Xcode's unpacked copy. Each link is named after its library, and they can share one lldbinit:
+
+```sh
+xcsrclink link SPMDemo/VendorPackage/Binaries/ObjCKit.xcframework --source VendorSDK --lldbinit SPMDemo/xcsrclink.lldbinit
+A=$(ls -d ~/Library/Developer/Xcode/DerivedData/SPMDemo-*/SourcePackages/artifacts/vendorpackage)
+xcsrclink link $A/StaticKit/StaticKit.xcframework --source VendorSDK --lldbinit SPMDemo/xcsrclink.lldbinit
+xcsrclink unlink StaticKit   # only that one; the scheme setting stays until the last link using the file is gone
+```
+
+A folder (`.../SourcePackages/artifacts`, `.build/artifacts`, the package root) links every binary target in it at once; give it `--name`.
+
+```sh
+xcsrclink link SPMDemo/VendorPackage/Binaries --source VendorSDK --name VendorBinaries --lldbinit SPMDemo/xcsrclink.lldbinit
+```
 
 ## Undo
 

@@ -141,11 +141,18 @@ public enum DebugBinaryLocator {
         while let rel = e.nextObject() as? String {
             let full = (path as NSString).appendingPathComponent(rel)
             let ext = (rel as NSString).pathExtension.lowercased()
+            let name = (rel as NSString).lastPathComponent
+            let parent = ((full as NSString).deletingLastPathComponent as NSString).lastPathComponent
             if ["xcframework", "framework", "dsym"].contains(ext) {
                 e.skipDescendants()
                 // A .framework that has a sibling .xcframework parent is handled by the xcframework.
                 visit(full, slice: nil, into: &r)
-            } else if [".git", ".build", "DerivedData", "node_modules"].contains((rel as NSString).lastPathComponent) {
+            } else if [".git", "DerivedData", "node_modules"].contains(name) {
+                e.skipDescendants()
+            } else if parent == ".build", !["artifacts", "checkouts"].contains(name), PathUtil.isDirectory(full) {
+                // SwiftPM: binary targets are unpacked into .build/artifacts and dependency
+                // packages are cloned into .build/checkouts. The rest is build output.
+                // (Only for folders: skipDescendants() on a file skips its remaining siblings.)
                 e.skipDescendants()
             } else if ext == "a" || ext == "o" {
                 file(full, slice: nil, into: &r)

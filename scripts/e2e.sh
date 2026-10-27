@@ -189,6 +189,16 @@ out="$("$X" link "$W/MyLib.xcframework" --map "$W/ci-agent/workspace/builds/job-
 grep -qE "would patch [1-9][0-9]* path string" <<<"$out" && ok "dry run reports patch count" || { bad "dry run"; echo "$out"; }
 cmp -s "$LIB" "$W/pristine.a" && [ ! -s "$INIT" ] && ok "dry run changed nothing" || bad "dry run changed files"
 
+echo "== command line"
+if "$X" link "$W/MyLib.xcframework" --source "$W/src" ----lldbinit "$INIT" >/dev/null 2>"$W/err"; then
+  bad "a misspelled option was accepted"
+else
+  grep -q "unknown option '----lldbinit'. Did you mean --lldbinit?" "$W/err" && [ -z "$("$X" list | grep MyLib)" ] \
+    && ok "misspelled option is rejected with a suggestion, nothing linked" || { bad "misspelled option error"; cat "$W/err"; }
+fi
+"$X" link "$W/MyLib.xcframework" "$W/extra" --source "$W/src" --dry-run >/dev/null 2>"$W/err" \
+  && bad "a second path was accepted" || { grep -q "unexpected argument" "$W/err" && ok "stray argument is rejected" || bad "stray argument error"; }
+
 echo
 echo "$pass passed, $failn failed"
 [ "$failn" -eq 0 ]
