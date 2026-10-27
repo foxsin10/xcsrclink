@@ -1,7 +1,7 @@
 import Foundation
 import Core
 
-let version = "0.2.0"
+let version = "0.2.1"
 
 let usage = """
 xcsrclink \(version): debug prebuilt .a / .xcframework libraries against your local source.
