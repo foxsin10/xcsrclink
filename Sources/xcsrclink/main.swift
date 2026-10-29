@@ -1,5 +1,5 @@
-import Core
 import Foundation
+import XcsrcLinkKit
 
 let version = "0.2.1"
 
@@ -45,6 +45,15 @@ let usage = """
     xcsrclink unlink MyLib
   """
 
+/// A usage error from the command line itself.
+struct UsageError: Error, CustomStringConvertible {
+  init(_ d: String) {
+    description = d
+  }
+
+  let description: String
+}
+
 struct Arguments {
   /// `valued` options take a value, `flags` don't. Anything else is an error, so a typo
   /// like `----lldbinit` stops the command instead of being silently ignored.
@@ -72,7 +81,7 @@ struct Arguments {
       arg = Arguments.aliases[arg] ?? arg
       if valued.contains(arg) {
         guard let v = inline ?? (i < raw.count ? raw[i] : nil) else {
-          throw LinkError("\(arg) needs a value")
+          throw UsageError("\(arg) needs a value")
         }
         if inline == nil {
           i += 1
@@ -81,15 +90,15 @@ struct Arguments {
       } else if known.contains(arg), inline == nil {
         flags.insert(arg)
       } else if known.contains(arg) {
-        throw LinkError("\(arg) takes no value")
+        throw UsageError("\(arg) takes no value")
       } else {
         let hint = Arguments.closest(to: arg, in: valued.union(known))
           .map { ". Did you mean \($0)?" } ?? ""
-        throw LinkError("unknown option '\(arg)'\(hint) See `xcsrclink help`.")
+        throw UsageError("unknown option '\(arg)'\(hint) See `xcsrclink help`.")
       }
     }
     if let max = maxPositionals, positionals.count > max, !flags.contains("--help") {
-      throw LinkError(
+      throw UsageError(
         "unexpected argument '\(positionals[max])'. Is the option before it misspelled?"
       )
     }
@@ -144,6 +153,39 @@ struct Arguments {
   }
 }
 
+func tildeAbbreviated(_ path: String) -> String {
+  let h = NSHomeDirectory()
+  return path.hasPrefix(h + "/") ? "~" + path.dropFirst(h.count) : path
+}
+
+/// The library's message plus what to type next.
+func message(for error: Error) -> String {
+  guard let e = error as? XcsrcLinkError else {
+    return "\(error)"
+  }
+  switch e {
+  case .missingSourceOrMappings:
+    return "pass --source <dir> or at least one --map OLD=NEW"
+  case let .noMatchingSources(input, _, _):
+    return "\(e) Run `xcsrclink info \(tildeAbbreviated(input))` to see the recorded paths."
+  case .signedXCFramework:
+    return "\(e) Re-run with --strip-signature (the signature is restored on unlink), or use --strategy lldbinit."
+  case .pathExists:
+    return "\(e) Use --strategy lldbinit instead."
+  case let .cannotCreateSymlink(_, parent, _):
+    return """
+      \(e)
+        The build path's folder isn't writable. Make it yours once, then re-run:
+          sudo mkdir -p '\(parent)' && sudo chown "$USER" '\(parent)'
+        or use --strategy lldbinit, which needs no special permissions.
+      """
+  case .noLink:
+    return "\(e). See `xcsrclink list`."
+  default:
+    return "\(e)"
+  }
+}
+
 func failWithMessage(_ message: String) -> Never {
   FileHandle.standardError.write(Data("error: \(message)\n".utf8))
   exit(1)
@@ -153,16 +195,15 @@ func runInfo(_ args: Arguments) throws {
   guard let path = args.positionals.first else {
     failWithMessage("usage: xcsrclink info <path> [--files]")
   }
-  let linker = Linker()
-  let ins = try linker.inspect(path)
-  ins.located.notes.forEach { print("note: \($0)") }
-  if ins.located.binaries
+  let ins = try Linker().inspect(path)
+  ins.notes.forEach { print("note: \($0)") }
+  if ins.binaries
     .isEmpty {
     failWithMessage("no static libraries, dSYMs or DWARF found in \(path)")
   }
 
   let fm = FileManager.default
-  for b in ins.located.binaries.sorted(by: { $0.path < $1.path }) {
+  for b in ins.binaries.sorted(by: { $0.path < $1.path }) {
     let files = ins.sources[b] ?? []
     print("\n\(b.slice.map { "[\($0)] " } ?? "")\(b.kind.rawValue): \(b.path)")
     guard !files.isEmpty else {
@@ -172,9 +213,9 @@ func runInfo(_ args: Arguments) throws {
     let present = files.filter { fm.fileExists(atPath: $0) }.count
     print("  \(files.count) source file(s), \(present) found at their recorded path")
     print("  build root(s):")
-    for g in SourcePathReader
-      .buildRoots(files) {
-      print("    \(g.root)  (\(g.count) files)")
+    for g in Inspection
+      .buildRoots(of: files) {
+      print("    \(g.path)  (\(g.fileCount) files)")
     }
     if args.flags.contains("--files") {
       for f in files {
@@ -210,33 +251,32 @@ func runLink(_ args: Arguments) throws {
     }
     o.explicitMappings.append(PathMapping(
       from: String(m[..<eq]),
-      to: PathUtil.absolute(String(m[m.index(after: eq)...]))
+      to: String(m[m.index(after: eq)...])
     ))
   }
   if let list = args.value(ofKey: "--strategy") {
     o.strategies = try list.split(separator: ",").map {
       let s = $0.trimmingCharacters(in: .whitespaces)
       guard let v = Strategy(rawValue: s) else {
-        throw LinkError(
+        throw UsageError(
           "unknown strategy '\(s)'. Use: \(Strategy.allCases.map(\.rawValue).joined(separator: ", "))"
         )
       }
       return v
     }
   }
-  try Linker().link(o)
+  let record = try Linker(console: .standard).link(o)
+  if !o.dryRun {
+    print("Undo with: xcsrclink unlink \(record.name)")
+  }
 }
 
 func runUnlink(_ args: Arguments) throws {
-  let linker = Linker()
+  let linker = Linker(console: .standard)
   let force = args.flags.contains("--force")
   if args.flags.contains("--all") {
-    let names = try Registry.load().records.map(\.name)
-    if names.isEmpty {
+    if try linker.unlinkAll(force: force).isEmpty {
       print("Nothing linked.")
-    }
-    for n in names {
-      try linker.unlink(name: n, force: force)
     }
     return
   }
@@ -249,26 +289,23 @@ func runUnlink(_ args: Arguments) throws {
 }
 
 func runList() throws {
-  let records = try Registry.load().records
+  let records = try Linker().links()
   if records.isEmpty {
     print("Nothing linked."); return
   }
   for r in records {
     print(
-      "\(r.name)  [\(r.strategies.map(\.rawValue).joined(separator: ","))]  \(PathUtil.tildeAbbreviated(r.input))"
+      "\(r.name)  [\(r.strategies.map(\.rawValue).joined(separator: ","))]  \(tildeAbbreviated(r.input))"
     )
     for m in r.mappings {
       print("    \(m.from) -> \(m.to)")
     }
     if let p = r.lldbinitPath {
-      print("    lldbinit: \(PathUtil.tildeAbbreviated(p))")
+      print("    lldbinit: \(tildeAbbreviated(p))")
     }
     if let s = r.schemes,
-       !s
-         .isEmpty {
-      print(
-        "    schemes: \(s.map { XcodeScheme.name(of: $0.path) }.joined(separator: ", "))"
-      )
+       !s.isEmpty {
+      print("    schemes: \(s.map(\.schemeName).joined(separator: ", "))")
     }
     if !r.patchedFiles.isEmpty {
       print("    patched: \(r.patchedFiles.count) file(s)")
@@ -326,5 +363,5 @@ do {
   default: failWithMessage("unknown command '\(command)'. Run `xcsrclink help`.")
   }
 } catch {
-  failWithMessage("\(error)")
+  failWithMessage(message(for: error))
 }

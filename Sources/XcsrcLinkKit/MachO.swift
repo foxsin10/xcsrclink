@@ -3,15 +3,15 @@ import Foundation
 /// Minimal reader that finds where DWARF sections live inside a file. Understands thin
 /// Mach-O (32/64-bit), fat/universal binaries and `ar` static archives, including
 /// archives inside fat files. Only file offsets are returned; nothing is decoded.
-public enum MachO {
-  public enum FileKind: String, Codable, Sendable {
+enum MachO {
+  enum FileKind: String, Codable, Sendable {
     case archive
     case fat
     case machO
     case unknown
   }
 
-  public static func kind(of bytes: UnsafeRawBufferPointer) -> FileKind {
+  static func kind(of bytes: UnsafeRawBufferPointer) -> FileKind {
     if bytes.count >= 8,
        Array(bytes[0 ..< 8]) == Array("!<arch>\n".utf8) {
       return .archive
@@ -34,7 +34,7 @@ public enum MachO {
     return .unknown
   }
 
-  public static func kind(ofFileAt path: String) -> FileKind {
+  static func kind(ofFileAt path: String) -> FileKind {
     guard let handle = FileHandle(forReadingAtPath: path) else {
       return .unknown
     }
@@ -45,7 +45,7 @@ public enum MachO {
 
   /// True for an `ar` archive, or a fat file whose slices are archives (what
   /// `lipo -create` makes from per-arch `.a` files, the usual vendor shape).
-  public static func isStaticArchive(fileAt path: String) -> Bool {
+  static func isStaticArchive(fileAt path: String) -> Bool {
     guard let handle = FileHandle(forReadingAtPath: path) else {
       return false
     }
@@ -83,14 +83,13 @@ public enum MachO {
   }
 
   /// File-offset ranges of every section in the `__DWARF` segment.
-  public static func dwarfSectionRanges(in bytes: UnsafeRawBufferPointer)
-    -> [Range<Int>] {
+  static func dwarfSectionRanges(in bytes: UnsafeRawBufferPointer) -> [Range<Int>] {
     var result: [Range<Int>] = []
     collect(bytes, start: 0, end: bytes.count, depth: 0, into: &result)
     return result
   }
 
-  public static func hasDWARF(fileAt path: String) -> Bool {
+  static func hasDWARF(fileAt path: String) -> Bool {
     guard let data = FileManager.default.contents(atPath: path) else {
       return false
     }

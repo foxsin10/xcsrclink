@@ -1,43 +1,68 @@
 import CryptoKit
 import Foundation
 
-public struct LinkError: Error, CustomStringConvertible {
-  public init(_ d: String) {
-    description = d
-  }
-
-  public let description: String
-}
-
-/// Where progress messages go. The CLI prints them; tests can collect them.
-public struct Console {
-  public init(info: @escaping (String) -> Void, warn: @escaping (String) -> Void) {
+/// Where progress messages go. ``Linker`` is silent by default. Pass ``standard`` to
+/// print like the CLI does, or your own closures to collect or forward the messages.
+public struct Console: Sendable {
+  public init(
+    info: @escaping @Sendable (String) -> Void,
+    warn: @escaping @Sendable (String) -> Void
+  ) {
     self.info = info
     self.warn = warn
   }
 
+  /// Info to stdout, warnings to stderr prefixed with `warning: `.
   public static let standard = Console(
     info: { print($0) },
     warn: { FileHandle.standardError.write(Data("warning: \($0)\n".utf8)) }
   )
 
-  public var info: (String) -> Void
-  public var warn: (String) -> Void
+  /// Drops every message.
+  public static let silent = Console(info: { _ in }, warn: { _ in })
+
+  public var info: @Sendable (String) -> Void
+  public var warn: @Sendable (String) -> Void
 }
 
-public struct LinkOptions {
-  public init(input: String) {
+/// What ``Linker/link(_:)`` should do.
+public struct LinkOptions: Sendable {
+  public init(
+    input: String,
+    sourceRoot: String? = nil,
+    strategies: [Strategy] = [.lldbinit]
+  ) {
     self.input = input
+    self.sourceRoot = sourceRoot
+    self.strategies = strategies
   }
 
+  /// The file Xcode's lldb reads: `~/.lldbinit-Xcode` when it exists, else `~/.lldbinit`.
+  public static var defaultLLDBInitPath: String {
+    LLDBInit.defaultPath
+  }
+
+  /// An `.xcframework`, `.framework`, `.a`, `.dSYM`, or a folder containing them.
+  /// Relative paths are resolved against the current directory.
   public var input: String
+  /// Local checkout of the library's source. Build paths are matched to files under it.
   public var sourceRoot: String?
+  /// Build path → local path rules. When not empty, `sourceRoot` isn't searched. Relative
+  /// local paths are resolved against the current directory.
   public var explicitMappings: [PathMapping] = []
   public var strategies: [Strategy] = [.lldbinit]
+  /// Name of the link. Defaults to the input's file name without extension. Linking again
+  /// under the same name replaces the earlier link.
   public var name: String?
+  /// lldbinit file for the `lldbinit` strategy. `nil` means ``defaultLLDBInitPath``.
   public var lldbinitPath: String?
+  /// Also write `settings set target.inline-breakpoint-strategy always`, which file:line
+  /// breakpoints in whole-module builds and headers need.
   public var inlineBreakpoints = true
+  /// With the `patch` strategy, move a signed xcframework's `_CodeSignature` aside
+  /// (restored on unlink). Without it, patching a signed xcframework throws.
   public var stripSignature = false
+  /// Report what would change through the console, and change nothing.
   public var dryRun = false
   /// With an explicit `lldbinitPath`, point Xcode schemes' LLDB Init File at it.
   public var editSchemes = true
@@ -46,25 +71,66 @@ public struct LinkOptions {
   public var schemes: [String] = []
 }
 
-public struct Linker {
-  public init(console: Console = .standard) {
+/// A folder that many recorded source files share, e.g. the CI checkout.
+public struct BuildRoot: Hashable, Sendable {
+  public var path: String
+  public var fileCount: Int
+}
+
+/// What a prebuilt library's debug info says about its sources. See
+/// ``Linker/inspect(_:)``.
+public struct Inspection: Sendable {
+  /// Files carrying DWARF found in the input.
+  public var binaries: [DebugBinary]
+  /// Source files recorded in each binary, without Xcode, SDK and compiler paths.
+  public var sources: [DebugBinary: [String]]
+  /// Things that were skipped, e.g. a dynamic framework without a dSYM.
+  public var notes: [String]
+
+  /// Every recorded source file, sorted and without duplicates.
+  public var allSources: [String] {
+    var seen = Set<String>()
+    return sources.values.flatMap(\.self).filter { seen.insert($0).inserted }.sorted()
+  }
+
+  /// Groups paths into a few folders that read as build roots.
+  public static func buildRoots(of paths: [String]) -> [BuildRoot] {
+    SourcePathReader.buildRoots(paths)
+      .map { BuildRoot(path: $0.root, fileCount: $0.count) }
+  }
+
+  var xcframeworks: [String]
+}
+
+/// Maps the build-machine paths in prebuilt libraries' debug info to a local checkout, so
+/// lldb (and Xcode) find the sources.
+///
+/// Links are stored in `registry.json` under ``home``, next to backups of patched files.
+/// Don't run two linkers on the same home at the same time.
+public struct Linker: Sendable {
+  public init(home: URL = Linker.defaultHome, console: Console = .silent) {
+    self.home = home
     self.console = console
   }
 
-  // MARK: - Inspect
-
-  public struct Inspection {
-    public var located: LocateResult
-    public var sources: [DebugBinary: [String]]
-
-    public var allSources: [String] {
-      var seen = Set<String>()
-      return sources.values.flatMap(\.self).filter { seen.insert($0).inserted }.sorted()
+  /// `$XCSRCLINK_HOME` when set, else `~/.xcsrclink`. The `xcsrclink` CLI uses the same
+  /// folder, so links made through the library show up in `xcsrclink list` and vice
+  /// versa.
+  public static var defaultHome: URL {
+    if let h = ProcessInfo.processInfo.environment["XCSRCLINK_HOME"], !h.isEmpty {
+      return URL(fileURLWithPath: PathUtil.absolute(h))
     }
+    return URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".xcsrclink")
   }
 
   public var console: Console
+  /// Folder holding the registry and backups.
+  public var home: URL
 
+  // MARK: - Inspect
+
+  /// Finds the binaries with debug info in `input` and reads the source paths they
+  /// record.
   public func inspect(_ input: String) throws -> Inspection {
     try Self.requireExists(input)
     let located = DebugBinaryLocator.locate(input)
@@ -72,11 +138,25 @@ public struct Linker {
     for b in located.binaries {
       sources[b] = try SourcePathReader.sources(in: b.path)
     }
-    return Inspection(located: located, sources: sources)
+    return Inspection(
+      binaries: located.binaries,
+      sources: sources,
+      notes: located.notes,
+      xcframeworks: located.xcframeworks
+    )
+  }
+
+  // MARK: - List
+
+  /// The current links, oldest first.
+  public func links() throws -> [LinkRecord] {
+    try Registry.load(home: home).records
   }
 
   // MARK: - Link
 
+  /// Links `options.input` to local sources and records the link. With `dryRun`, only
+  /// reports through the console and returns the record it would create.
   @discardableResult
   public func link(_ o: LinkOptions) throws -> LinkRecord {
     let input = PathUtil.absolute(o.input)
@@ -87,43 +167,45 @@ public struct Linker {
     try Self.requireExists(input)
     if o.explicitMappings.isEmpty, let source = o.sourceRoot.map(PathUtil.absolute),
        !PathUtil.isDirectory(source) {
-      throw LinkError("source folder not found: \(source)")
+      throw XcsrcLinkError.sourceFolderNotFound(path: source)
     }
 
     // Undo a previous link with this name first: a patched binary must be restored before
     // its paths are read again.
-    if !o.dryRun, try Registry.load().records.contains(where: { $0.name == name }) {
+    if !o.dryRun,
+       try Registry.load(home: home).records.contains(where: { $0.name == name }) {
       console.info("Replacing previous link '\(name)'")
       try unlink(name: name, force: false)
     }
 
     let inspection = try inspect(input)
-    inspection.located.notes.forEach(console.warn)
-    let debugBinaries = inspection.located.binaries
+    inspection.notes.forEach(console.warn)
+    let debugBinaries = inspection.binaries
       .filter { !(inspection.sources[$0] ?? []).isEmpty }
     guard !debugBinaries.isEmpty else {
-      throw LinkError(
-        "no debug info with source paths found in \(input). Build the library with -g (DEBUG_INFORMATION_FORMAT) and ship .a files or dSYMs."
-      )
+      throw XcsrcLinkError.noDebugInfo(input: input)
     }
     let originals = inspection.allSources
 
     // 1. Work out the mappings.
-    var mappings = o.explicitMappings
+    var mappings = o.explicitMappings.map { PathMapping(
+      from: $0.from,
+      to: PathUtil.absolute($0.to)
+    ) }
     let sourceRoot = o.sourceRoot.map(PathUtil.absolute)
     if mappings.isEmpty {
       guard let sourceRoot else {
-        throw LinkError("pass --source <dir> or at least one --map OLD=NEW")
+        throw XcsrcLinkError.missingSourceOrMappings
       }
       guard PathUtil.isDirectory(sourceRoot) else {
-        throw LinkError("source folder not found: \(sourceRoot)")
+        throw XcsrcLinkError.sourceFolderNotFound(path: sourceRoot)
       }
       let r = MappingResolver.resolve(originals: originals, sourceRoot: sourceRoot)
       mappings = r.mappings
       if !r.ambiguous.isEmpty {
         console
           .warn(
-            "\(r.ambiguous.count) file(s) matched several local files equally well and were skipped, e.g. \(r.ambiguous[0]). Use --map to be explicit."
+            "\(r.ambiguous.count) file(s) matched several local files equally well and were skipped, e.g. \(r.ambiguous[0]). Give explicit mappings for them."
           )
       }
       if !r.unmatched.isEmpty {
@@ -135,8 +217,10 @@ public struct Linker {
     }
     mappings = MappingResolver.simplify(mappings)
     guard !mappings.isEmpty else {
-      throw LinkError(
-        "couldn't match any of the \(originals.count) recorded source files to files under \(sourceRoot ?? "?"). Is this the right checkout? Run `xcsrclink info` to see the recorded paths."
+      throw XcsrcLinkError.noMatchingSources(
+        input: input,
+        recordedFiles: originals.count,
+        sourceRoot: sourceRoot ?? "?"
       )
     }
 
@@ -169,14 +253,14 @@ public struct Linker {
     }
 
     // 2. Apply. On failure, undo what was done so far.
-    var registry = try Registry.load()
+    var registry = try Registry.load(home: home)
     do {
       for s in [Strategy.patch, .symlink, .lldbinit] where o.strategies.contains(s) {
         switch s {
         case .patch: try applyPatch(
             &record,
             binaries: debugBinaries,
-            xcframeworks: inspection.located.xcframeworks,
+            xcframeworks: inspection.xcframeworks,
             stripSignature: o.stripSignature
           )
         case .symlink: try applySymlinks(&record)
@@ -188,7 +272,7 @@ public struct Linker {
         try applySchemes(&record, lldbinit: path, only: o.schemes)
       }
       registry.records.append(record)
-      try registry.save()
+      try registry.save(home: home)
       if let path = record.lldbinitPath {
         try refreshLLDBInit(path, registry: registry)
         console
@@ -197,9 +281,10 @@ public struct Linker {
     } catch {
       revertSchemes(record.schemes ?? [])
       try? rollback(record)
-      if var r = try? Registry.load(), r.records.contains(where: { $0.name == name }) {
+      if var r = try? Registry.load(home: home),
+         r.records.contains(where: { $0.name == name }) {
         r.records.removeAll { $0.name == name }
-        try? r.save()
+        try? r.save(home: home)
         if let path = record.lldbinitPath {
           try? refreshLLDBInit(path, registry: r)
         }
@@ -209,17 +294,19 @@ public struct Linker {
 
     console
       .info(
-        "\nDone. Restart the debug session in Xcode\(o.strategies.contains(.patch) ? " and rebuild so the patched library is relinked" : ""). Undo with: xcsrclink unlink \(name)"
+        "\nDone. Restart the debug session in Xcode\(o.strategies.contains(.patch) ? " and rebuild so the patched library is relinked" : "")."
       )
     return record
   }
 
   // MARK: - Unlink
 
-  public func unlink(name: String, force: Bool) throws {
-    var registry = try Registry.load()
+  /// Removes everything ``link(_:)`` did for this link. A patched file that changed since
+  /// (e.g. an updated library) is left alone unless `force` is set.
+  public func unlink(name: String, force: Bool = false) throws {
+    var registry = try Registry.load(home: home)
     guard let idx = registry.records.firstIndex(where: { $0.name == name }) else {
-      throw LinkError("no link named '\(name)'. See `xcsrclink list`.")
+      throw XcsrcLinkError.noLink(name: name)
     }
     let record = registry.records[idx]
     try restore(record, force: force)
@@ -234,7 +321,7 @@ public struct Linker {
         .schemes = (registry.records[other].schemes ?? []) + schemesToRevert
       schemesToRevert = []
     }
-    try registry.save()
+    try registry.save(home: home)
     revertSchemes(schemesToRevert)
     if let path = record.lldbinitPath {
       try refreshLLDBInit(path, registry: registry)
@@ -246,6 +333,16 @@ public struct Linker {
     console.info("Unlinked '\(name)'")
   }
 
+  /// Unlinks every link and returns their names.
+  @discardableResult
+  public func unlinkAll(force: Bool = false) throws -> [String] {
+    let names = try links().map(\.name)
+    for n in names {
+      try unlink(name: n, force: force)
+    }
+    return names
+  }
+
   // MARK: - Schemes
 
   struct SchemeTarget { var scheme: String; var value: String }
@@ -253,7 +350,7 @@ public struct Linker {
   static func requireExists(_ input: String) throws {
     let path = PathUtil.absolute(input)
     guard FileManager.default.fileExists(atPath: path) else {
-      throw LinkError("not found: \(path)")
+      throw XcsrcLinkError.notFound(path: path)
     }
   }
 
@@ -263,10 +360,10 @@ public struct Linker {
     let names = only.filter { !$0.hasSuffix(".xcscheme") }
     for p in paths.map(PathUtil.absolute) {
       guard FileManager.default.fileExists(atPath: p) else {
-        throw LinkError("scheme not found: \(p)")
+        throw XcsrcLinkError.schemeNotFound(path: p)
       }
       guard let dir = XcodeScheme.projectDir(ofScheme: p) else {
-        throw LinkError("\(p) is not inside an .xcodeproj or .xcworkspace")
+        throw XcsrcLinkError.schemeOutsideProject(path: p)
       }
       targets.append(SchemeTarget(
         scheme: p,
@@ -280,7 +377,7 @@ public struct Linker {
     guard let found = XcodeScheme.find(near: lldbinit), !found.schemes.isEmpty else {
       console.warn("""
         no saved Xcode scheme found at or above \(PathUtil.tildeAbbreviated(lldbinit)), so no scheme was changed. \
-        Pass --scheme <path/to/Name.xcscheme>, or set Edit Scheme › Run › Info › LLDB Init File to this file yourself.
+        Pass the .xcscheme path, or set Edit Scheme › Run › Info › LLDB Init File to this file yourself.
         """)
       return targets
     }
@@ -289,9 +386,10 @@ public struct Linker {
       schemes = schemes.filter { names.contains(XcodeScheme.name(of: $0)) }
       let missing = Set(names).subtracting(schemes.map(XcodeScheme.name(of:)))
       if !missing.isEmpty {
-        let available = found.schemes.map(XcodeScheme.name(of:)).joined(separator: ", ")
-        throw LinkError(
-          "no scheme named \(missing.sorted().joined(separator: ", ")) in \(found.projectDir). Found: \(available)"
+        throw XcsrcLinkError.unknownSchemes(
+          names: missing.sorted(),
+          projectDir: found.projectDir,
+          available: found.schemes.map(XcodeScheme.name(of:))
         )
       }
     }
@@ -301,7 +399,8 @@ public struct Linker {
   }
 
   private var backupRoot: URL {
-    URL(fileURLWithPath: PathUtil.home).appendingPathComponent("backups") }
+    home.appendingPathComponent("backups")
+  }
 
   private func dryRun(
     _ record: LinkRecord,
@@ -410,9 +509,7 @@ public struct Linker {
         continue
       }
       guard stripSignature else {
-        throw LinkError(
-          "\(xcf) is code signed and patching would invalidate its signature, so Xcode would reject it. Re-run with --strip-signature (the signature is restored on unlink), or use --strategy lldbinit."
-        )
+        throw XcsrcLinkError.signedXCFramework(path: xcf)
       }
       let backup = try backupDirectory(for: record.name)
         .appendingPathComponent("signature-\(record.movedSignatures.count)").path
@@ -504,12 +601,10 @@ public struct Linker {
         if PathUtil.absolute(dest) == m.to {
           continue
         }
-        throw LinkError("\(m.from) is already a symlink to \(dest). Remove it first.")
+        throw XcsrcLinkError.symlinkConflict(path: m.from, destination: dest)
       }
       if fm.fileExists(atPath: m.from) {
-        throw LinkError(
-          "\(m.from) already exists and is not a symlink; refusing to replace it. Use --strategy lldbinit instead."
-        )
+        throw XcsrcLinkError.pathExists(path: m.from)
       }
       // Create missing parents one by one so unlink can remove exactly those.
       var missing: [String] = []
@@ -528,12 +623,11 @@ public struct Linker {
         console.info("Symlinked \(m.from) -> \(m.to)")
       } catch {
         let parent = missing.first ?? (m.from as NSString).deletingLastPathComponent
-        throw LinkError("""
-          couldn't create \(m.from): \(error.localizedDescription)
-            The build path's folder isn't writable. Make it yours once, then re-run:
-              sudo mkdir -p '\(parent)' && sudo chown "$USER" '\(parent)'
-            or use --strategy lldbinit, which needs no special permissions.
-          """)
+        throw XcsrcLinkError.cannotCreateSymlink(
+          path: m.from,
+          parent: parent,
+          reason: error.localizedDescription
+        )
       }
     }
   }
@@ -552,7 +646,7 @@ public struct Linker {
       if !force, fm.fileExists(atPath: p.path), (try? sha256(p.path)) != p.patchedSHA256 {
         console
           .warn(
-            "\(p.path) changed since it was patched (updated library?), not restoring it. Use --force to restore anyway."
+            "\(p.path) changed since it was patched (updated library?), not restoring it. Unlink with force to restore it anyway."
           )
         continue
       }

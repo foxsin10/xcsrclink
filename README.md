@@ -243,6 +243,46 @@ Check what lldb loaded in Xcode's debug console (⌘⇧Y) while the app is pause
 - **"non-launching port is incompatible with service identifier ..."** and similar
   simulator messages are system log noise, unrelated to debugging.
 
+## Use as a Swift library
+
+Everything the CLI does is also available as the `XcsrcLinkKit` library (macOS 13+), for
+other command-line tools, build scripts or Mac apps:
+
+```swift
+// Package.swift
+.package(url: "https://github.com/foxsin10/xcsrclink", from: "0.3.0"),
+// in your target's dependencies:
+.product(name: "XcsrcLinkKit", package: "xcsrclink"),
+```
+
+```swift
+import XcsrcLinkKit
+
+let linker = Linker()                         // silent; Linker(console: .standard) prints like the CLI
+let inspection = try linker.inspect("Pods/MyLib/MyLib.xcframework")
+print(Inspection.buildRoots(of: inspection.allSources))
+
+var options = LinkOptions(input: "Pods/MyLib/MyLib.xcframework", sourceRoot: "~/src/MyLib")
+options.strategies = [.lldbinit]              // or .patch, .symlink
+// options.dryRun = true                      // only report through the console, change nothing
+let record = try linker.link(options)         // record.mappings: build path -> local path
+
+let links = try linker.links()                // same as `xcsrclink list`
+try linker.unlink(name: record.name)          // same as `xcsrclink unlink`
+```
+
+- **Shared state.** Links are stored in `~/.xcsrclink` (or `$XCSRCLINK_HOME`), the same
+  place the CLI uses, so `xcsrclink list` shows links made from code and the other way
+  round. Pass `Linker(home:)` to keep them somewhere else, e.g. in tests.
+- **Messages.** `Linker` prints nothing by default. Pass `Console(info:warn:)` to collect
+  or forward progress messages and warnings.
+- **Errors.** Everything throws `XcsrcLinkError`, an enum with the paths and names involved
+  (`.notFound(path:)`, `.noDebugInfo(input:)`, `.signedXCFramework(path:)`, `.noLink(name:)`,
+  ...). Its `description` has no CLI flags in it, so your tool can add its own hints.
+- **Limits.** It runs `xcrun dwarfdump` and `mdfind`, so it needs Xcode and can't run in an
+  App Sandbox. Don't run two linkers on the same home folder at once. SwiftPM plugins can't
+  depend on libraries, so a plugin should call the `xcsrclink` executable instead.
+
 ## Agent skill
 
 [`skills/xcsrclink`](skills/xcsrclink/SKILL.md) teaches your agent the workflow above
@@ -267,7 +307,7 @@ Keep it in sync with the CLI: when a flag or behavior changes, update the skill 
 
 ```sh
 make install           # rebuild and reinstall after changes
-swift test             # unit tests (path matching, Mach-O/archive parsing, patcher, lldbinit)
+swift test             # unit tests (path matching, Mach-O/archive parsing, patcher, lldbinit, public API)
 scripts/e2e.sh         # builds real Swift libraries/xcframeworks and checks every strategy with lldb
 scripts/e2e-spm.sh     # same, consumed through SwiftPM binaryTargets (path, zip, dynamic + dSYM)
 TestProject/scripts/verify.sh   # iOS app + simulator check, see below (APP=SPMDemo: the SwiftPM version)
