@@ -6,23 +6,27 @@ import Foundation
 public struct Console: Sendable {
   public init(
     info: @escaping @Sendable (String) -> Void,
-    warn: @escaping @Sendable (String) -> Void
+    warn: @escaping @Sendable (LinkWarning) -> Void
   ) {
     self.info = info
     self.warn = warn
   }
 
-  /// Info to stdout, warnings to stderr prefixed with `warning: `.
+  /// Info to stdout, warnings to stderr prefixed with `warning: `. Stdout is flushed
+  /// first so both appear in order when piped.
   public static let standard = Console(
     info: { print($0) },
-    warn: { FileHandle.standardError.write(Data("warning: \($0)\n".utf8)) }
+    warn: {
+      fflush(nil)
+      FileHandle.standardError.write(Data("warning: \($0)\n".utf8))
+    }
   )
 
   /// Drops every message.
   public static let silent = Console(info: { _ in }, warn: { _ in })
 
   public var info: @Sendable (String) -> Void
-  public var warn: @Sendable (String) -> Void
+  public var warn: @Sendable (LinkWarning) -> Void
 }
 
 /// What ``Linker/link(_:)`` should do.
@@ -179,7 +183,7 @@ public struct Linker: Sendable {
     }
 
     let inspection = try inspect(input)
-    inspection.notes.forEach(console.warn)
+    inspection.notes.forEach { console.warn(.note($0)) }
     let debugBinaries = inspection.binaries
       .filter { !(inspection.sources[$0] ?? []).isEmpty }
     guard !debugBinaries.isEmpty else {
@@ -203,16 +207,15 @@ public struct Linker: Sendable {
       let r = MappingResolver.resolve(originals: originals, sourceRoot: sourceRoot)
       mappings = r.mappings
       if !r.ambiguous.isEmpty {
-        console
-          .warn(
-            "\(r.ambiguous.count) file(s) matched several local files equally well and were skipped, e.g. \(r.ambiguous[0]). Give explicit mappings for them."
-          )
+        console.warn(.ambiguousMatches(count: r.ambiguous.count, example: r.ambiguous[0]))
       }
       if !r.unmatched.isEmpty {
-        console
-          .warn(
-            "\(r.unmatched.count) of \(originals.count) source file(s) have no match under \(sourceRoot), e.g. \(r.unmatched[0])"
-          )
+        console.warn(.unmatchedFiles(
+          count: r.unmatched.count,
+          total: originals.count,
+          sourceRoot: sourceRoot,
+          example: r.unmatched[0]
+        ))
       }
     }
     mappings = MappingResolver.simplify(mappings)
@@ -375,10 +378,7 @@ public struct Linker: Sendable {
     }
 
     guard let found = XcodeScheme.find(near: lldbinit), !found.schemes.isEmpty else {
-      console.warn("""
-        no saved Xcode scheme found at or above \(PathUtil.tildeAbbreviated(lldbinit)), so no scheme was changed. \
-        Pass the .xcscheme path, or set Edit Scheme › Run › Info › LLDB Init File to this file yourself.
-        """)
+      console.warn(.noSchemeFound(lldbinit: lldbinit))
       return targets
     }
     var schemes = found.schemes
@@ -453,14 +453,15 @@ public struct Linker: Sendable {
       let xml = try String(contentsOfFile: t.scheme, encoding: .utf8)
       switch XcodeScheme.lldbInitFile(in: xml) {
       case nil:
-        console.warn("scheme '\(name)' has no Run action, skipping it")
+        console.warn(.schemeWithoutRunAction(name: name))
       case .some(t.value)?:
         console.info("Scheme '\(name)' already uses \(t.value)")
       case let .some(other?):
-        console.warn("""
-          scheme '\(name)' already uses LLDB Init File \(other), leaving it. \
-          Add `command source \(PathUtil.tildeAbbreviated(lldbinit))` to that file instead.
-          """)
+        console.warn(.schemeUsesOtherInitFile(
+          name: name,
+          file: other,
+          lldbinit: lldbinit
+        ))
       case .some(nil):
         guard let updated = XcodeScheme.setting(t.value, in: xml) else {
           continue
@@ -480,13 +481,13 @@ public struct Linker: Sendable {
         continue
       }
       guard case .some(e.value)? = XcodeScheme.lldbInitFile(in: xml) else {
-        console.warn("scheme '\(name)' no longer uses \(e.value), leaving it")
+        console.warn(.schemeChangedSinceLinked(name: name, value: e.value))
         continue
       }
       guard let updated = XcodeScheme.setting(nil, in: xml),
             (try? updated.write(toFile: e.path, atomically: true, encoding: .utf8)) !=
             nil else {
-        console.warn("couldn't update scheme '\(name)' at \(e.path)")
+        console.warn(.schemeNotUpdated(name: name, path: e.path))
         continue
       }
       console.info("Removed LLDB Init File from scheme '\(name)'")
@@ -542,59 +543,33 @@ public struct Linker: Sendable {
       ))
       console.info("Patched \(total) path string(s) in \(b.path)")
     }
-    warnAboutUnpatchedCopies(of: record.patchedFiles)
+    warnAboutUnpatchedCopies(of: record)
   }
 
   /// lldb finds a dSYM by its UUID through Spotlight, so an older copy elsewhere
   /// (DerivedData from an earlier build, another checkout) can be loaded instead of the
   /// patched one, and still shows the build machine's paths.
-  private func warnAboutUnpatchedCopies(of patched: [PatchedFile]) {
-    let patchedPaths = Set(patched.map { SourcePath($0.path) })
+  private func warnAboutUnpatchedCopies(of record: LinkRecord) {
+    let patchedPaths = Set(record.patchedFiles.map { SourcePath($0.path) })
     var stale = Set<String>()
-    for p in patched where p.path.contains(".dSYM/Contents/Resources/DWARF/") {
-      guard let r = try? Shell.run("/usr/bin/xcrun", ["dwarfdump", "--uuid", p.path]),
-            r.status == 0 else {
-        continue
-      }
-      let uuids = r.stdout.split(separator: "\n").compactMap { line -> String? in
-        let parts = line.split(separator: " ")
-        return parts.count > 1 && parts[0] == "UUID:" ? String(parts[1]) : nil
-      }
-      let dwarfName = (p.path as NSString).lastPathComponent
-      for uuid in uuids {
-        guard let found = try? Shell.run(
-          "/usr/bin/mdfind",
-          ["com_apple_xcode_dsym_uuids == \(uuid)"]
-        ) else {
-          continue
-        }
-        for bundle in found.stdout.split(separator: "\n").map(String.init) {
-          let file = (bundle as NSString)
-            .appendingPathComponent("Contents/Resources/DWARF/\(dwarfName)")
-          guard !patchedPaths.contains(SourcePath(file)),
-                FileManager.default.fileExists(atPath: file),
-                (try? sha256(file)) != p.patchedSHA256 else {
-            continue
-          }
-          stale.insert(bundle)
-        }
+    for p in record.patchedFiles
+      where p.path.contains(".dSYM/Contents/Resources/DWARF/") {
+      for file in DSYMLocator.copies(ofDWARFFile: p.path).dropFirst()
+        where !patchedPaths.contains(SourcePath(file)) && (try? sha256(file)) != p
+        .patchedSHA256 {
+        stale.insert(DSYMLocator.bundle(ofDWARFFile: file))
       }
     }
-    guard !stale.isEmpty else {
-      return
+    if !stale.isEmpty {
+      console.warn(.unpatchedDSYMCopies(input: record.input, copies: stale.sorted()))
     }
-    console.warn("""
-      Other copies of the patched dSYM still have the build machine's paths. lldb finds dSYMs \
-      by UUID and may load one of them instead. Rebuild the project each belongs to (Xcode \
-      copies the dSYM again), or delete it:
-      """ + stale.sorted().map { "\n  \(PathUtil.tildeAbbreviated($0))" }.joined())
   }
 
   private func applySymlinks(_ record: inout LinkRecord) throws {
     let fm = FileManager.default
     for m in record.mappings {
       guard m.from.hasPrefix("/") else {
-        console.warn("skipping symlink for relative build path '\(m.from)'")
+        console.warn(.relativeSymlinkSkipped(path: m.from))
         continue
       }
       if let dest = try? fm.destinationOfSymbolicLink(atPath: m.from) {
@@ -640,14 +615,11 @@ public struct Linker: Sendable {
     let fm = FileManager.default
     for p in record.patchedFiles {
       guard fm.fileExists(atPath: p.backup) else {
-        console.warn("backup missing for \(p.path), leaving it patched")
+        console.warn(.backupMissing(path: p.path))
         continue
       }
       if !force, fm.fileExists(atPath: p.path), (try? sha256(p.path)) != p.patchedSHA256 {
-        console
-          .warn(
-            "\(p.path) changed since it was patched (updated library?), not restoring it. Unlink with force to restore it anyway."
-          )
+        console.warn(.patchedFileChanged(path: p.path))
         continue
       }
       if fm.fileExists(atPath: p.path) {

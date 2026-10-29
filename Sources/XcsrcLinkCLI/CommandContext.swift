@@ -29,10 +29,14 @@ public struct CommandOutput: Sendable {
     self.printError = printError
   }
 
-  /// Text to stdout, errors and warnings to stderr.
+  /// Text to stdout, errors and warnings to stderr. Stdout is flushed before each error,
+  /// so both appear in order when piped.
   public static let standard = CommandOutput(
     print: { Swift.print($0) },
-    printError: { FileHandle.standardError.write(Data("\($0)\n".utf8)) }
+    printError: {
+      fflush(nil)
+      FileHandle.standardError.write(Data("\($0)\n".utf8))
+    }
   )
 
   /// Drops all text.
@@ -40,16 +44,10 @@ public struct CommandOutput: Sendable {
 
   public var print: @Sendable (String) -> Void
   public var printError: @Sendable (String) -> Void
-
-  /// Progress messages to ``print``, warnings to ``printError`` as `warning: …`.
-  public var console: Console {
-    let printError = printError
-    return Console(info: print, warn: { printError("warning: \($0)") })
-  }
 }
 
-/// What commands run against: the link registry, the output, and the program name used
-/// in hints such as `Undo with: xcsrclink unlink MyLib`.
+/// What commands run against: the link registry, the output, and the program name used in
+/// hints such as `Undo with: xcsrclink unlink MyLib`.
 public struct CommandContext: Sendable {
   public init(
     home: URL = Linker.defaultHome,
@@ -67,9 +65,21 @@ public struct CommandContext: Sendable {
   /// Name to show in hints and usage, e.g. `mytool xcsrc` when embedded in another CLI.
   public var programName: String
 
-  /// A linker on ``home`` that reports to ``output``.
+  /// Progress messages to `output.print`; warnings to `output.printError` as
+  /// `warning: …`, with the CLI's hints.
+  public var console: Console {
+    let output = output, programName = programName
+    return Console(info: output.print, warn: { warning in
+      output
+        .printError(
+          "warning: \(XcsrcLinkCLI.message(for: warning, programName: programName))"
+        )
+    })
+  }
+
+  /// A linker on ``home`` that reports to ``console``.
   public var linker: Linker {
-    Linker(home: home, console: output.console)
+    Linker(home: home, console: console)
   }
 }
 
