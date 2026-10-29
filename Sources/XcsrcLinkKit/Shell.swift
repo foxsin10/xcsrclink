@@ -1,16 +1,13 @@
 import Foundation
 
-public struct ShellResult {
-  public let status: Int32
-  public let stdout: String
-  public let stderr: String
+struct ShellResult {
+  let status: Int32
+  let stdout: String
+  let stderr: String
 }
 
-public enum Shell {
-  public static func run(
-    _ executable: String,
-    _ arguments: [String]
-  ) throws -> ShellResult {
+enum Shell {
+  static func run(_ executable: String, _ arguments: [String]) throws -> ShellResult {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments

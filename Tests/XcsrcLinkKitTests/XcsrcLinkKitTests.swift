@@ -1,6 +1,6 @@
-@testable import Core
 import Foundation
 import Testing
+@testable import XcsrcLinkKit
 
 struct PathTests {
   @Test func normalizesPaths() {
@@ -309,7 +309,7 @@ struct PatcherTests {
 
   @Test func refusesLongerReplacement() {
     var data = makeMachO(debugStr: strings)
-    #expect(throws: PatchError.self) {
+    #expect(throws: XcsrcLinkError.self) {
       try DWARFPatcher.patch(
         &data,
         mappings: [PathMapping(from: "/ci", to: "/Users/someone/very/long")]
@@ -393,7 +393,8 @@ struct LinkerInputTests {
     o.sourceRoot = FileManager.default.temporaryDirectory.path
     o.dryRun = true
     #expect { try Linker().link(o) } throws: {
-      ($0 as? LinkError)?.description.hasPrefix("not found:") == true }
+      ($0 as? XcsrcLinkError) == .notFound(path: o.input)
+    }
   }
 
   @Test func missingSourceFolderIsReportedBeforeInspecting() throws {
@@ -407,8 +408,41 @@ struct LinkerInputTests {
     var o = LinkOptions(input: dir)
     o.sourceRoot = "/nonexistent-\(UUID().uuidString)"
     o.dryRun = true
-    #expect { try Linker().link(o) } throws: {
-      ($0 as? LinkError)?.description.hasPrefix("source folder not found:") == true }
+    #expect(throws: try XcsrcLinkError
+      .sourceFolderNotFound(path: #require(o.sourceRoot))) { try Linker().link(o) }
+  }
+}
+
+/// Uses only the public API, the way another tool would.
+struct PublicAPITests {
+  @Test func linksLiveInTheGivenHome() throws {
+    let home = FileManager.default.temporaryDirectory
+      .appendingPathComponent("home-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: home) }
+    let linker = Linker(home: home)
+    #expect(try linker.links().isEmpty)
+    #expect(try linker.unlinkAll().isEmpty)
+    #expect(throws: XcsrcLinkError.noLink(name: "Nope")) {
+      try linker.unlink(name: "Nope") }
+    #expect(!FileManager.default.fileExists(atPath: home.path))
+  }
+
+  @Test func groupsBuildRoots() {
+    let roots = Inspection.buildRoots(of: [
+      "/ci/a/Lib/Sources/A.swift",
+      "/ci/a/Lib/Sources/Sub/B.swift",
+      "Rel/C.swift"
+    ])
+    #expect(roots == [
+      BuildRoot(path: "/ci/a/Lib/Sources", fileCount: 2),
+      BuildRoot(path: "Rel", fileCount: 1)
+    ])
+  }
+
+  @Test func errorsReadWithoutCommandLineHints() {
+    let e = XcsrcLinkError.signedXCFramework(path: "/x/K.xcframework")
+    #expect(!e.description.contains("--"))
+    #expect(XcsrcLinkError.noLink(name: "K").description == "no link named 'K'")
   }
 }
 

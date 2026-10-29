@@ -5,24 +5,41 @@ import Foundation
 ///
 /// `/ci/job-7/MyLib/Sources/Foo.swift` + local `~/src/MyLib/Sources/Foo.swift` share
 /// `MyLib/Sources/Foo.swift`, which gives `/ci/job-7 -> ~/src`.
-public enum MappingResolver {
-  public struct Result {
+enum MappingResolver {
+  struct Result {
     /// Ordered most specific first (the order lldb and the patcher should apply them in).
-    public var mappings: [PathMapping] = []
-    public var matched: [(original: String, local: String)] = []
-    public var unmatched: [String] = []
+    var mappings: [PathMapping] = []
+    var matched: [(original: String, local: String)] = []
+    var unmatched: [String] = []
     /// Files with several equally good local candidates.
-    public var ambiguous: [String] = []
+    var ambiguous: [String] = []
   }
 
-  public static let sourceExtensions: Set<String> = [
+  static let sourceExtensions: Set<String> = [
     "swift", "m", "mm", "c", "cc", "cpp", "cxx", "c++", "h", "hh", "hpp", "hxx", "inc",
     "def",
     "s", "metal"
   ]
+  static let skippedDirectories: Set<String> = [
+    ".git",
+    ".build",
+    "DerivedData",
+    ".swiftpm",
+    "node_modules",
+    ".svn",
+    ".hg"
+  ]
+  static let skippedBundles: Set<String> = [
+    "xcframework",
+    "framework",
+    "dsym",
+    "xcodeproj",
+    "xcworkspace",
+    "xcassets"
+  ]
 
   /// basename → local files with that basename.
-  public static func index(sourceRoot: String) -> [String: [SourcePath]] {
+  static func index(sourceRoot: String) -> [String: [SourcePath]] {
     var idx: [String: [SourcePath]] = [:]
     let root = PathUtil.absolute(sourceRoot)
     guard let e = FileManager.default.enumerator(atPath: root) else {
@@ -44,7 +61,7 @@ public enum MappingResolver {
     return idx
   }
 
-  public static func resolve(originals: [String], sourceRoot: String) -> Result {
+  static func resolve(originals: [String], sourceRoot: String) -> Result {
     resolve(
       originals: originals,
       index: index(sourceRoot: sourceRoot),
@@ -56,7 +73,7 @@ public enum MappingResolver {
   /// covers files outside the checkout (e.g. the app's own sources next to it). lldb
   /// applies source maps in reverse to breakpoints, so a too-broad mapping would move
   /// breakpoints in unrelated files to the build path where they can't bind.
-  public static func resolve(
+  static func resolve(
     originals: [String],
     index: [String: [SourcePath]],
     sourceRoot: SourcePath? = nil
@@ -123,12 +140,17 @@ public enum MappingResolver {
     return result
   }
 
+  /// Number of trailing components two paths share.
+  static func sharedTail(_ a: [String], _ b: [String]) -> Int {
+    zip(a.reversed(), b.reversed()).prefix { $0 == $1 }.count
+  }
+
   /// For `patch`: turns `/ci/job/Lib -> /me/proj/Lib` into `/ci/job -> /me/proj` by
   /// dropping the shared trailing folders. It maps every path the narrow one does to the
   /// same place, and also covers compile folders (DW_AT_comp_dir, line-table dir 0) that
   /// sit above the source folder when the compiler recorded relative file paths. Only
   /// safe for rewriting the vendor binaries, not for lldb source maps.
-  public static func widened(_ mappings: [PathMapping]) -> [PathMapping] {
+  static func widened(_ mappings: [PathMapping]) -> [PathMapping] {
     simplify(mappings.map { m in
       var from = SourcePath(m.from).components, to = SourcePath(m.to).components
       while from.count > 1, to.count > 1, from.last == to.last {
@@ -139,29 +161,6 @@ public enum MappingResolver {
         to: "/" + to.joined(separator: "/")
       )
     })
-  }
-
-  static let skippedDirectories: Set<String> = [
-    ".git",
-    ".build",
-    "DerivedData",
-    ".swiftpm",
-    "node_modules",
-    ".svn",
-    ".hg"
-  ]
-  static let skippedBundles: Set<String> = [
-    "xcframework",
-    "framework",
-    "dsym",
-    "xcodeproj",
-    "xcworkspace",
-    "xcassets"
-  ]
-
-  /// Number of trailing components two paths share.
-  static func sharedTail(_ a: [String], _ b: [String]) -> Int {
-    zip(a.reversed(), b.reversed()).prefix { $0 == $1 }.count
   }
 
   /// Drops mappings already implied by a broader one, and orders most specific first.

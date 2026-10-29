@@ -1,43 +1,22 @@
 import Foundation
 
-public enum PatchError: Error, CustomStringConvertible {
-  case relativePath(PathMapping)
-  case replacementTooLong(PathMapping, extraBytes: Int)
-  case unreadable(String)
-
-  public var description: String {
-    switch self {
-    case let .relativePath(m):
-      "can't patch relative build path '\(m.from)' in place; use the lldbinit strategy instead"
-    case let .replacementTooLong(m, extra):
-      """
-      can't patch '\(m.from)' in place: the local path '\(m.to)' is \(extra) bytes longer than the build path.
-        Binary patching keeps every string the same length. Either use --strategy lldbinit
-        (no binary changes), or put your checkout at a path no longer than the build path.
-      """
-    case let .unreadable(p):
-      "can't read \(p)"
-    }
-  }
-}
-
 /// Rewrites source paths inside DWARF sections without changing any sizes or offsets.
 ///
 /// Each occurrence of `from` that sits on a path boundary is overwritten with `to`, and
 /// the leftover bytes are filled with `/`. lldb normalizes `a////b` to `a/b`, so the
 /// padded path resolves to the local file.
-public enum DWARFPatcher {
-  public static let padByte = UInt8(ascii: "/")
+enum DWARFPatcher {
+  static let padByte = UInt8(ascii: "/")
 
-  public static func validate(_ mappings: [PathMapping]) throws {
+  static func validate(_ mappings: [PathMapping]) throws {
     for m in mappings {
       guard m.from.hasPrefix("/"),
             m.to.hasPrefix("/") else {
-        throw PatchError.relativePath(m)
+        throw XcsrcLinkError.relativeBuildPath(m)
       }
       let extra = m.to.utf8.count - m.from.utf8.count
       if extra > 0 {
-        throw PatchError.replacementTooLong(m, extraBytes: extra)
+        throw XcsrcLinkError.replacementTooLong(m, extraBytes: extra)
       }
     }
   }
@@ -45,7 +24,7 @@ public enum DWARFPatcher {
   /// Patches `data` in place. Returns how many strings each mapping rewrote (same order
   /// as `mappings`).
   @discardableResult
-  public static func patch(_ data: inout Data, mappings: [PathMapping]) throws -> [Int] {
+  static func patch(_ data: inout Data, mappings: [PathMapping]) throws -> [Int] {
     try validate(mappings)
     // Most specific first, so `/a/b/c` wins over `/a`.
     let order = mappings.indices
@@ -106,13 +85,13 @@ public enum DWARFPatcher {
   }
 
   /// Reads, patches and atomically rewrites a file. With `dryRun`, only counts.
-  public static func patchFile(
+  static func patchFile(
     at path: String,
     mappings: [PathMapping],
     dryRun: Bool = false
   ) throws -> [Int] {
     guard var data = FileManager.default.contents(atPath: path) else {
-      throw PatchError.unreadable(path)
+      throw XcsrcLinkError.unreadable(path: path)
     }
     let counts = try patch(&data, mappings: mappings)
     if !dryRun, counts.contains(where: { $0 > 0 }) {

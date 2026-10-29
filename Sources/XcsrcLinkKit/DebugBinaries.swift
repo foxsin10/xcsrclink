@@ -15,17 +15,17 @@ public struct DebugBinary: Hashable, Codable, Sendable {
   public let slice: String?
 }
 
-public struct LocateResult {
-  public var binaries: [DebugBinary] = []
+struct LocateResult {
+  var binaries: [DebugBinary] = []
   /// Human-readable notes about things that were skipped (dynamic frameworks without
   /// dSYMs, ...).
-  public var notes: [String] = []
+  var notes: [String] = []
   /// xcframework bundles found (they may be code signed).
-  public var xcframeworks: [String] = []
+  var xcframeworks: [String] = []
 }
 
-public enum DebugBinaryLocator {
-  public static func locate(_ input: String) -> LocateResult {
+enum DebugBinaryLocator {
+  static func locate(_ input: String) -> LocateResult {
     var result = LocateResult()
     visit(PathUtil.absolute(input), slice: nil, into: &result)
     var seen = Set<String>()
@@ -201,14 +201,17 @@ public enum DebugBinaryLocator {
   }
 }
 
-public enum SourcePathReader {
+enum SourcePathReader {
   /// Source files recorded in the binary's DWARF, minus Xcode/SDK/compiler paths.
-  public static func sources(in binary: String) throws -> [String] {
+  static func sources(in binary: String) throws -> [String] {
     let r = try Shell.run("/usr/bin/xcrun", ["dwarfdump", "--show-sources", binary])
     guard r.status == 0 else {
-      throw NSError(domain: "xcsrclink", code: Int(r.status), userInfo: [
-        NSLocalizedDescriptionKey: "dwarfdump failed for \(binary): \(r.stderr.trimmingCharacters(in: .whitespacesAndNewlines))"
-      ])
+      throw XcsrcLinkError.toolFailed(
+        command: "dwarfdump \(binary)",
+        status: r.status,
+        message: r.stderr
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+      )
     }
     var seen = Set<String>()
     return r.stdout.split(separator: "\n").map(String.init)
@@ -220,7 +223,7 @@ public enum SourcePathReader {
   }
 
   /// Groups paths into a few directories that read as "build roots".
-  public static func buildRoots(_ paths: [String]) -> [(root: String, count: Int)] {
+  static func buildRoots(_ paths: [String]) -> [(root: String, count: Int)] {
     var groups: [(prefix: [String], abs: Bool, count: Int)] = []
     for p in paths.map(SourcePath.init).sorted() {
       let dir = Array(p.components.dropLast())

@@ -2,10 +2,13 @@ import Foundation
 
 /// Maintains one managed block inside an lldbinit file. Everything outside the block is
 /// left alone.
-public enum LLDBInit {
+enum LLDBInit {
+  static let begin = "# >>> xcsrclink (managed block, edit with `xcsrclink link/unlink`) >>>"
+  static let end = "# <<< xcsrclink <<<"
+
   /// Xcode reads `~/.lldbinit-Xcode` when it exists and `~/.lldbinit` otherwise. Writing
   /// to whichever Xcode reads avoids hiding the other file.
-  public static var defaultPath: String {
+  static var defaultPath: String {
     let home = NSHomeDirectory()
     let xcode = (home as NSString).appendingPathComponent(".lldbinit-Xcode")
     if FileManager.default.fileExists(atPath: xcode) {
@@ -14,7 +17,7 @@ public enum LLDBInit {
     return (home as NSString).appendingPathComponent(".lldbinit")
   }
 
-  public static func render(_ records: [LinkRecord]) -> String? {
+  static func render(_ records: [LinkRecord]) -> String? {
     guard !records.isEmpty else {
       return nil
     }
@@ -36,7 +39,7 @@ public enum LLDBInit {
   }
 
   /// Replaces (or removes, when `block` is nil) the managed block in `path`.
-  public static func write(block: String?, to path: String) throws {
+  static func write(block: String?, to path: String) throws {
     let existing = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
     var kept: [Substring] = []
     var inside = false
@@ -84,9 +87,6 @@ public enum LLDBInit {
     )
     try text.write(toFile: path, atomically: true, encoding: .utf8)
   }
-
-  static let begin = "# >>> xcsrclink (managed block, edit with `xcsrclink link/unlink`) >>>"
-  static let end = "# <<< xcsrclink <<<"
 
   static func quote(_ s: String) -> String {
     "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(
