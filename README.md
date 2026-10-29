@@ -353,6 +353,51 @@ try linker.unlink(name: record.name)          // same as `xcsrclink unlink`
   App Sandbox. Don't run two linkers on the same home folder at once. SwiftPM plugins can't
   depend on libraries, so a plugin should call the `xcsrclink` executable instead.
 
+### The command line as a library
+
+`XcsrcLinkCLI` is the `xcsrclink` command line itself: argument parsing, the text each
+command prints, and the hints in error messages. Use it to give your own tool the same
+commands. Add `.product(name: "XcsrcLinkCLI", package: "xcsrclink")`, then either run a
+whole command line, for example as a subcommand of your tool:
+
+```swift
+import XcsrcLinkCLI
+
+// mytool xcsrc link MyLib.xcframework --source ~/src/MyLib
+let context = CommandContext(programName: "mytool xcsrc")   // used in hints and help
+let status = XcsrcLinkCLI.run(Array(CommandLine.arguments.dropFirst(2)), context: context)
+```
+
+or use the commands one by one. Each one can be parsed from arguments or built in code,
+returns a typed result from `run(in:)`, and renders its text with a plain function:
+
+```swift
+import XcsrcLinkCLI
+import XcsrcLinkKit
+
+let output = CommandOutput(print: { print("[xcsrc] \($0)") }, printError: { print("[xcsrc] \($0)") })
+let context = CommandContext(output: output)
+
+let info = InfoCommand(path: "MyLib.xcframework")          // or InfoCommand(arguments: [...])
+let inspection = try info.run(in: context)                 // prints what `xcsrclink info` prints
+let text = info.report(for: inspection)                    // the same text, without printing
+
+let link = try LinkCommand(arguments: ["MyLib.xcframework", "--source", "src", "-S", "patch"])
+let record = try link.run(in: context)                     // LinkRecord
+
+try UnlinkCommand(.names([record.name])).run(in: context)  // or UnlinkCommand(.all, force: true)
+let links = try ListCommand().run(in: context)             // [LinkRecord]
+```
+
+| Piece | What it gives you |
+|---|---|
+| `InfoCommand`, `LinkCommand`, `UnlinkCommand`, `ListCommand` | `init(arguments:)` parses CLI arguments; plain initializers build them in code; `run(in:)` runs and returns the result |
+| `InfoCommand.report(for:)`, `ListCommand.report(for:)` | the text the CLI prints, as a `String` |
+| `PathMapping(argument: "OLD=NEW")`, `Strategy.list(from: "patch,lldbinit")` | `--map` and `--strategy` parsing |
+| `CommandContext` | home folder, `CommandOutput` (stdout/stderr or your closures), program name |
+| `CommandError` | typed parsing errors (`.unknownOption(_:suggestion:)`, `.missingArgument(command:)`, ...) |
+| `XcsrcLinkCLI.run(_:context:)`, `message(for:programName:)`, `usage(programName:)` | the whole CLI: dispatch, `error: …` messages with hints, help text; returns the exit status |
+
 ## Agent skill
 
 [`skills/xcsrclink`](skills/xcsrclink/SKILL.md) teaches your agent the workflow above
