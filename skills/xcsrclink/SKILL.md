@@ -23,7 +23,7 @@ A library built with `-g` records the absolute **build paths** of its sources on
 5. **Choose where the mapping goes**, then run the same command without `--dry-run`:
    - **Default, `lldbinit` strategy**: writes `target.source-map` to `~/.lldbinit-Xcode` if it exists, else `~/.lldbinit`. Changes no binaries, applies to every Xcode debug session.
    - **Per project, `--lldbinit <file>`**: writes to that file and sets Run › Info › LLDB Init File to `$(SRCROOT)/<relative path>` in the schemes of the Xcode project found in the file's folder or its parents. Put the file next to the `.xcodeproj` so the project is found. A file in a sibling folder needs `--scheme path/to/Name.xcscheme`; an unsaved (auto-created) scheme needs the same. The file holds local paths: make sure `.gitignore` covers it. `--scheme <name>` limits edits, `--no-scheme` skips them. A scheme that already uses another init file is left alone; add `command source <file>` to that file.
-   - **`--strategy patch`**: rewrites paths inside the `.a`/dSYM (backed up, restored on unlink). Use when no lldb config is wanted or teammates should share the fix. Local path must be no longer than the build path; signed xcframeworks need `--strip-signature`; rebuild in Xcode afterwards.
+   - **`--strategy patch`**: rewrites paths inside the `.a`/dSYM (backed up, restored on unlink). Use when no lldb config is wanted or teammates should share the fix. Writes no lldbinit file. Local path must be no longer than the build path; signed xcframeworks need `--strip-signature`; rebuild in Xcode afterwards. Done when `xcsrclink info <path>` reports `N found at their recorded path` for every binary. If file:line breakpoints in a whole-module Swift library still don't bind, relink with `-S patch,lldbinit` (lldbinit adds `target.inline-breakpoint-strategy always`). A `pod install`, vendor update or SwiftPM re-unpack replaces the binary and undoes the patch: link again.
    - **`--strategy symlink`**: symlink at the build path. Breakpoints only bind in files opened from the build path; may need `sudo` once for the parent folder. Last resort.
 
 6. **Verify in Xcode.** Quit and reopen Xcode if it was open while linking (it keeps one lldb running, so old mappings stay loaded), then run, break at a call into the library, and press Step Into (F7). Done when the library's source file opens. If not, read [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
@@ -54,6 +54,18 @@ xcsrclink link DemoApp/Frameworks/DynamicKit.xcframework --source VendorSDK/Sour
 ```
 
 `xcsrclink unlink DynamicKit` reverts either one: mappings, the scheme setting, and the emptied lldbinit file.
+
+Patch the binary instead (no lldbinit file). The dry run prints `would patch N path string(s)` per `.a`; afterwards `info` finds the files at their recorded paths:
+
+```sh
+xcsrclink link DemoApp/Frameworks/StaticKit.xcframework --source VendorSDK --strategy patch --dry-run
+xcsrclink link DemoApp/Frameworks/StaticKit.xcframework --source VendorSDK --strategy patch
+xcsrclink info DemoApp/Frameworks/StaticKit.xcframework   # "2 source file(s), 2 found at their recorded path"
+# rebuild in Xcode (⌘B) so the app links the patched .a, then debug
+xcsrclink unlink StaticKit                                # copies the original .a files back
+```
+
+DynamicKit's dSYM is patched the same way. A local path longer than the build path fails with `N bytes longer than the build path`: use `lldbinit` or a shorter checkout path.
 
 SwiftPM, one binary target at a time (the `SPMDemo/` app; `VendorPackage` ships StaticKit and DynamicKit zipped, ObjCKit as a folder). Pass the target's `.xcframework`: a `path:` one where it is, a zipped or `url:` one from Xcode's unpacked copy. Each link is named after its library, and they can share one lldbinit:
 
