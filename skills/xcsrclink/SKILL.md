@@ -5,7 +5,7 @@ description: Source-debug prebuilt iOS/macOS libraries (.a, .framework, .xcframe
 
 # xcsrclink
 
-A library built with `-g` records the absolute **build paths** of its sources on the machine that built it. lldb can't find those files locally, so breakpoints stay pending and Step Into lands in assembly. `xcsrclink link` maps the build paths to a local checkout; `xcsrclink unlink` undoes it. `xcsrclink help` is the source of truth for flags. For Swift code (another CLI, a build script), the same features are in the `XcsrcLinkKit` library: see the README's "Use as a Swift library".
+A library built with `-g` records the absolute **build paths** of its sources on the machine that built it. lldb can't find those files locally, so breakpoints stay pending and Step Into lands in assembly. `xcsrclink link` maps the build paths to a local checkout; `xcsrclink unlink` undoes it. `xcsrclink help` is the source of truth for flags. For Swift code (another CLI, a build script), the same features are in the `XcsrcLinkKit` library, and the commands themselves (parsing, output, `XcsrcLinkCLI.run`) in `XcsrcLinkCLI`: see the README's "Use as a Swift library".
 
 ## Steps
 
