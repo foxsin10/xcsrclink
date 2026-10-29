@@ -115,6 +115,76 @@ is an iOS app set up this way.
 
 Strategies can be combined, e.g. `--strategy patch,lldbinit`.
 
+### Example: the `patch` strategy
+
+`patch` writes your local paths into the library itself. lldb then finds the sources
+with no `source-map`, and no lldbinit file is written. Here it runs on StaticKit from
+[`TestProject`](TestProject/README.md), which was built on a fake CI path:
+
+```console
+$ xcsrclink link StaticKit.xcframework --source ~/src/VendorSDK --strategy patch --dry-run
+Mappings (2/2 source files found locally):
+  /tmp/xcsrclink-ci/buildkite-agent-07/workspace/ios-sdk-release/builds/job-48213/VendorSDK
+    -> /Users/me/src/VendorSDK
+
+Dry run, nothing was changed.
+  would patch 6 path string(s) in .../StaticKit.xcframework/ios-arm64/libStaticKit.a
+  would patch 12 path string(s) in .../StaticKit.xcframework/ios-arm64_x86_64-simulator/libStaticKit.a
+
+$ xcsrclink link StaticKit.xcframework --source ~/src/VendorSDK --strategy patch
+Mappings (2/2 source files found locally):
+  ...
+Patched 6 path string(s) in .../StaticKit.xcframework/ios-arm64/libStaticKit.a
+Patched 12 path string(s) in .../StaticKit.xcframework/ios-arm64_x86_64-simulator/libStaticKit.a
+
+Done. Restart the debug session in Xcode and rebuild so the patched library is relinked.
+Undo with: xcsrclink unlink StaticKit
+
+$ xcsrclink info StaticKit.xcframework    # the recorded paths now exist on this machine
+  2 source file(s), 2 found at their recorded path
+```
+
+The build path was overwritten in place. The leftover bytes are filled with `/`, so no
+size or offset changes, and lldb reads `a///b` as `a/b`:
+
+```console
+$ strings -a StaticKit.xcframework/ios-arm64/libStaticKit.a | grep Greeter.swift
+/Users/me/src///////////////////////////////////////////////////////////////////VendorSDK/Sources/StaticKit/Greeter.swift
+```
+
+Rebuild the app (⌘B) so Xcode links the patched `.a`. Breakpoints in
+`~/src/VendorSDK/Sources/StaticKit/Greeter.swift` then bind, and Step Into opens it.
+`xcsrclink unlink StaticKit` copies the original files back from
+`~/.xcsrclink/backups`.
+
+Other cases:
+
+```sh
+# Code-signed xcframework: patching breaks the signature, so it's refused unless you
+# allow moving the signature aside (unlink puts it back)
+xcsrclink link MyLib.xcframework --source ~/src/MyLib -S patch --strip-signature
+
+# Dynamic framework: its dSYM is patched (inside the xcframework, or pass the .dSYM)
+xcsrclink link MyDyn.xcframework --source ~/src/MyDyn -S patch
+
+# Swift built whole-module: breakpoints in files that aren't their own compile unit need
+# target.inline-breakpoint-strategy=always, which only the lldbinit strategy writes
+xcsrclink link MyLib.xcframework --source ~/src/MyLib -S patch,lldbinit
+
+# The library was updated since patching: unlink leaves it alone unless forced
+xcsrclink unlink MyLib --force
+```
+
+- **Path length.** The local path must be no longer than the build path. If it's longer,
+  `link` stops with `can't patch '…' in place: the local path '…' is N bytes longer than
+  the build path` and changes nothing. Move the checkout to a shorter path, or use
+  `lldbinit`.
+- **Replacing the binary undoes the patch.** `pod install`, a vendor update, or SwiftPM
+  unpacking the archive again brings back the original paths. Link again afterwards.
+- **Old dSYM copies.** lldb finds dSYMs by UUID through Spotlight and may load an
+  unpatched copy, e.g. in DerivedData. `link` lists the copies it finds; rebuild their
+  project or delete them.
+
 ### Options
 
 ```Bash

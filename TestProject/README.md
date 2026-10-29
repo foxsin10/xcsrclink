@@ -105,6 +105,8 @@ Other strategies to try (unlink between them; run from the repo root):
 ```sh
 # Rewrite the paths inside the binaries. Rebuild (⌘B) afterwards so Xcode re-copies them.
 xcsrclink link TestProject/DemoApp/Frameworks --source TestProject/VendorSDK --name VendorSDK --strategy patch
+# Check: every library now reports "N found at their recorded path", with no lldbinit file
+xcsrclink info TestProject/DemoApp/Frameworks
 
 # cocoapods-imy-bin style: a symlink at the CI path. Step Into works; breakpoints bind in
 # the files Xcode opens from the /tmp/xcsrclink-ci/... path.
