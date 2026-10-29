@@ -5,7 +5,7 @@ import XcsrcLinkKit
 /// line; the command types (``InfoCommand``, ``LinkCommand``, ``UnlinkCommand``,
 /// ``ListCommand``) can also be parsed, built and run one by one.
 public enum XcsrcLinkCLI {
-  public static let version = "0.2.1"
+  public static let version = "0.3.0"
 
   /// The commands ``run(_:context:)`` knows, by name.
   public static let commands: [any XcsrcLinkCommand.Type] = parsable
