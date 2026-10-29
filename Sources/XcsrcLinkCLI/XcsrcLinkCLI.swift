@@ -11,8 +11,8 @@ public enum XcsrcLinkCLI {
   public static let commands: [any XcsrcLinkCommand.Type] = parsable
 
   /// Runs one command line without the program name, e.g.
-  /// `["link", "MyLib.xcframework", "--source", "src"]`. Errors are printed as
-  /// `error: …` to `context.output`. Returns the exit status: 0 on success, 1 on error.
+  /// `["link", "MyLib.xcframework", "--source", "src"]`. Errors are printed as `error: …`
+  /// to `context.output`. Returns the exit status: 0 on success, 1 on error.
   public static func run(
     _ arguments: [String],
     context: CommandContext = CommandContext()
@@ -49,16 +49,17 @@ public enum XcsrcLinkCLI {
     }
   }
 
-  /// An error's message plus what to type next, e.g. `no link named 'X'. See
-  /// `xcsrclink list`.`
+  /// An error's message plus what to type next, e.g. `no link named 'X'. See `xcsrclink
+  /// list`.`
   public static func message(
     for error: Error,
     programName p: String = "xcsrclink"
   ) -> String {
     if let e = error as? CommandError {
       switch e {
-      case .unknownOption:
-        return "\(e). See `\(p) help`."
+      case let .unknownOption(_, suggestion):
+        // "Did you mean --x?" already ends the sentence.
+        return "\(e)\(suggestion == nil ? "." : "") See `\(p) help`."
       case let .missingArgument(command):
         return "usage: \(p) \(usageLine(of: command))"
       case .unknownCommand:
@@ -80,6 +81,14 @@ public enum XcsrcLinkCLI {
         + "or use --strategy lldbinit."
     case .pathExists:
       return "\(e) Use --strategy lldbinit instead."
+    case let .relativeBuildPath(m):
+      return "can't patch relative build path '\(m.from)' in place; use --strategy lldbinit instead"
+    case let .replacementTooLong(m, extra):
+      return """
+        can't patch '\(m.from)' in place: the local path '\(m.to)' is \(extra) bytes longer than the build path.
+          Binary patching keeps every string the same length. Either use --strategy lldbinit
+          (no binary changes), or put your checkout at a path no longer than the build path.
+        """
     case let .cannotCreateSymlink(_, parent, _):
       return """
         \(e)
@@ -104,13 +113,18 @@ public enum XcsrcLinkCLI {
     assembly. \(p) points those paths at your local checkout.
 
     USAGE
-      \(p) info   <path> [--files]
+      \(p) info   <path> [--files] [--copies]
       \(p) link   <path> --source <dir> [options]
       \(p) unlink <name> [--force]  |  \(p) unlink --all
       \(p) list
 
     <path> may be an .xcframework, .framework, .a, .dSYM, or a folder containing them
     (e.g. Pods/ or Carthage/Build).
+
+    INFO OPTIONS
+          --files              List every recorded source file, ✓ if it exists here
+          --copies             For each dSYM, list every copy with the same UUID (lldb may
+                               load any of them) and whether its files exist here
 
     LINK OPTIONS
       -s, --source <dir>       Local checkout of the library's source. Build paths are matched
@@ -139,6 +153,31 @@ public enum XcsrcLinkCLI {
     """
   }
 
+  /// A warning's message plus the CLI flag that addresses it, e.g.
+  /// `Use --force to restore anyway.`
+  public static func message(
+    for warning: LinkWarning,
+    programName p: String = "xcsrclink"
+  ) -> String {
+    switch warning {
+    case let .ambiguousMatches(count, example):
+      "\(count) file(s) matched several local files equally well and were skipped, "
+        + "e.g. \(example). Use --map to be explicit."
+    case let .noSchemeFound(lldbinit):
+      "no saved Xcode scheme found at or above \(tildeAbbreviated(lldbinit)), so no "
+        + "scheme was changed. Pass --scheme <path/to/Name.xcscheme>, or set Edit Scheme › Run "
+        + "› Info › LLDB Init File to this file yourself."
+    case let .patchedFileChanged(path):
+      "\(path) changed since it was patched (updated library?), not restoring it. "
+        + "Use --force to restore anyway."
+    case let .unpatchedDSYMCopies(input, _):
+      "\(warning)\n  Check which copies lldb could load with: "
+        + "\(p) info \(tildeAbbreviated(input)) --copies"
+    default:
+      "\(warning)"
+    }
+  }
+
   static let parsable: [any ParsableCommand.Type] = [
     InfoCommand.self,
     LinkCommand.self,
@@ -148,7 +187,7 @@ public enum XcsrcLinkCLI {
 
   static func usageLine(of command: String) -> String {
     switch command {
-    case InfoCommand.name: "info <path> [--files]"
+    case InfoCommand.name: "info <path> [--files] [--copies]"
     case LinkCommand.name: "link <path> --source <dir> [options]"
     case UnlinkCommand.name: "unlink <name> | --all"
     default: command

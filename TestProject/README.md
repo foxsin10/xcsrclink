@@ -198,6 +198,12 @@ In the debug console (⌘⇧Y) while paused:
 - **DynamicKit shows assembly.** Its dSYM wasn't found (`image list DynamicKit` shows no
   second line). Load it with
   `add-dsym TestProject/DemoApp/Frameworks/DynamicKit.xcframework/ios-arm64_x86_64-simulator/dSYMs/DynamicKit.framework.dSYM`.
+- **DynamicKit shows assembly after `patch`.** lldb loaded an unpatched copy of the dSYM
+  with the same UUID. The second line of `image list DynamicKit` shows which one. Here
+  that is usually `build/` or `build-spm/` (left by `verify.sh`) or SPMDemo's
+  DerivedData, which still hold the original. They're build output: delete them, then
+  quit and reopen Xcode. `xcsrclink info DemoApp/Frameworks/DynamicKit.xcframework
+  --copies` lists every copy, ✓ patched or ✗ not.
 - **"non-launching port is incompatible with service identifier
   com.apple.PointerUI..."** is simulator log noise; ignore it.
 

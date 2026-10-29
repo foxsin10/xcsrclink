@@ -182,8 +182,9 @@ xcsrclink unlink MyLib --force
 - **Replacing the binary undoes the patch.** `pod install`, a vendor update, or SwiftPM
   unpacking the archive again brings back the original paths. Link again afterwards.
 - **Old dSYM copies.** lldb finds dSYMs by UUID through Spotlight and may load an
-  unpatched copy, e.g. in DerivedData. `link` lists the copies it finds; rebuild their
-  project or delete them.
+  unpatched copy, e.g. in DerivedData. `link` lists the copies it finds, and
+  `xcsrclink info <path> --copies` shows every copy with ✓ (its files exist here) or ✗
+  (still the build machine's paths). Rebuild their projects or delete the ✗ ones.
 
 ### Options
 
@@ -310,6 +311,23 @@ Check what lldb loaded in Xcode's debug console (⌘⇧Y) while the app is pause
   `--map`.
 - **Dynamic framework still shows assembly.** lldb didn't find its dSYM. Load it with
   `add-dsym /path/to/MyLib.framework.dSYM` and step in again.
+- **After `patch`, a dynamic framework still shows assembly.** lldb finds dSYMs by UUID
+  through Spotlight and may have loaded an unpatched copy, e.g. from another project's
+  DerivedData or an old build folder. `image list MyLib` shows the loaded one on its
+  second line. List every copy with the same UUID:
+
+  ```console
+  $ xcsrclink info MyLib.xcframework --copies
+  ...
+    dSYMs with this UUID (lldb loads whichever it finds first):
+      ✓ 2/2 found  ~/src/App/Frameworks/MyLib.xcframework/.../MyLib.framework.dSYM  (this one)
+      ✓ 2/2 found  ~/Library/Developer/Xcode/DerivedData/App-…/Build/Products/.../MyLib.framework.dSYM
+      ✗ 0/2 found  ~/Library/Developer/Xcode/DerivedData/OtherApp-…/Build/Products/.../MyLib.framework.dSYM
+  ```
+
+  ✗ copies still have the build machine's paths. Delete them or rebuild their projects,
+  then quit and reopen Xcode.
+  Linking with `--strategy patch,lldbinit` also covers copies that weren't patched.
 - **"non-launching port is incompatible with service identifier ..."** and similar
   simulator messages are system log noise, unrelated to debugging.
 
@@ -345,7 +363,11 @@ try linker.unlink(name: record.name)          // same as `xcsrclink unlink`
   place the CLI uses, so `xcsrclink list` shows links made from code and the other way
   round. Pass `Linker(home:)` to keep them somewhere else, e.g. in tests.
 - **Messages.** `Linker` prints nothing by default. Pass `Console(info:warn:)` to collect
-  or forward progress messages and warnings.
+  or forward progress messages and warnings. Warnings are a `LinkWarning` enum
+  (`.ambiguousMatches`, `.unpatchedDSYMCopies(input:copies:)`, ...), so your tool can
+  react to them or word them its own way.
+- **dSYM copies.** `linker.dSYMCopies(of:)` lists every dSYM with the same UUID as one in
+  an `Inspection`, and how many of its recorded files exist here.
 - **Errors.** Everything throws `XcsrcLinkError`, an enum with the paths and names involved
   (`.notFound(path:)`, `.noDebugInfo(input:)`, `.signedXCFramework(path:)`, `.noLink(name:)`,
   ...). Its `description` has no CLI flags in it, so your tool can add its own hints.
@@ -394,9 +416,9 @@ let links = try ListCommand().run(in: context)             // [LinkRecord]
 | `InfoCommand`, `LinkCommand`, `UnlinkCommand`, `ListCommand` | `init(arguments:)` parses CLI arguments; plain initializers build them in code; `run(in:)` runs and returns the result |
 | `InfoCommand.report(for:)`, `ListCommand.report(for:)` | the text the CLI prints, as a `String` |
 | `PathMapping(argument: "OLD=NEW")`, `Strategy.list(from: "patch,lldbinit")` | `--map` and `--strategy` parsing |
-| `CommandContext` | home folder, `CommandOutput` (stdout/stderr or your closures), program name |
+| `CommandContext` | home folder, `CommandOutput` (stdout/stderr or your closures), program name; `console` adds the CLI's hints to warnings |
 | `CommandError` | typed parsing errors (`.unknownOption(_:suggestion:)`, `.missingArgument(command:)`, ...) |
-| `XcsrcLinkCLI.run(_:context:)`, `message(for:programName:)`, `usage(programName:)` | the whole CLI: dispatch, `error: …` messages with hints, help text; returns the exit status |
+| `XcsrcLinkCLI.run(_:context:)`, `message(for:programName:)`, `usage(programName:)` | the whole CLI: dispatch, `error: …` and `warning: …` messages with hints, help text; returns the exit status |
 
 ## Agent skill
 

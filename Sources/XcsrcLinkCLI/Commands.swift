@@ -9,12 +9,13 @@ protocol ParsableCommand: XcsrcLinkCommand {
 
 // MARK: - info
 
-/// `xcsrclink info <path> [--files]`: the binaries with debug info in `path` and the
-/// source files they record.
+/// `xcsrclink info <path> [--files] [--copies]`: the binaries with debug info in `path`
+/// and the source files they record.
 public struct InfoCommand: ParsableCommand {
-  public init(path: String, showFiles: Bool = false) {
+  public init(path: String, showFiles: Bool = false, showCopies: Bool = false) {
     self.path = path
     self.showFiles = showFiles
+    self.showCopies = showCopies
   }
 
   public init(arguments: [String]) throws {
@@ -25,7 +26,11 @@ public struct InfoCommand: ParsableCommand {
     guard let path = args.positionals.first else {
       throw CommandError.missingArgument(command: Self.name)
     }
-    self.init(path: path, showFiles: args.flags.contains("--files"))
+    self.init(
+      path: path,
+      showFiles: args.flags.contains("--files"),
+      showCopies: args.flags.contains("--copies")
+    )
   }
 
   public static let name = "info"
@@ -34,9 +39,13 @@ public struct InfoCommand: ParsableCommand {
   public var path: String
   /// List every recorded source file, marked ✓ when it exists here.
   public var showFiles: Bool
+  /// For each dSYM, list every copy with the same UUID (see ``Linker/dSYMCopies(of:)``),
+  /// since lldb may load any of them.
+  public var showCopies: Bool
 
-  /// Inspects ``path`` and prints ``report(for:programName:)``. Throws
-  /// ``CommandError/nothingFound(path:)`` when there's nothing with debug info.
+  /// Inspects ``path`` (and, with ``showCopies``, finds the dSYM copies) and prints
+  /// ``report(for:copies:programName:)``. Throws ``CommandError/nothingFound(path:)``
+  /// when there's nothing with debug info.
   @discardableResult
   public func run(in context: CommandContext) throws -> Inspection {
     let inspection = try context.linker.inspect(path)
@@ -46,14 +55,22 @@ public struct InfoCommand: ParsableCommand {
       }
       throw CommandError.nothingFound(path: path)
     }
-    context.output.print(report(for: inspection, programName: context.programName))
+    var copies: [DebugBinary: [DSYMCopy]] = [:]
+    if showCopies {
+      for binary in inspection.binaries where binary.kind == .dSYM {
+        copies[binary] = try context.linker.dSYMCopies(of: binary)
+      }
+    }
+    let text = report(for: inspection, copies: copies, programName: context.programName)
+    context.output.print(text)
     return inspection
   }
 
-  /// The text `info` prints: per binary, how many recorded files exist here and the
-  /// build roots they share.
+  /// The text `info` prints: per binary, how many recorded files exist here and the build
+  /// roots they share, plus the dSYM copies in `copies` (with ``showCopies``).
   public func report(
     for inspection: Inspection,
+    copies: [DebugBinary: [DSYMCopy]] = [:],
     programName: String = "xcsrclink"
   ) -> String {
     let fm = FileManager.default
@@ -78,6 +95,15 @@ public struct InfoCommand: ParsableCommand {
       if showFiles {
         lines += files.map { "    \(fm.fileExists(atPath: $0) ? "✓" : "✗") \($0)" }
       }
+      if showCopies, let found = copies[binary] {
+        lines += copyLines(found)
+      }
+    }
+    if showCopies, !inspection.binaries.contains(where: { $0.kind == .dSYM }) {
+      lines += [
+        "",
+        "--copies: no dSYMs here. Static libraries carry their own debug info."
+      ]
     }
     let all = inspection.allSources
     if !all.isEmpty, !all.contains(where: { fm.fileExists(atPath: $0) }) {
@@ -90,7 +116,23 @@ public struct InfoCommand: ParsableCommand {
     return lines.joined(separator: "\n")
   }
 
-  static let spec = ArgumentSpec(flags: ["--files"], maxPositionals: 1)
+  static let spec = ArgumentSpec(flags: ["--files", "--copies"], maxPositionals: 1)
+
+  /// `✓` when every recorded file exists here (patched, or mapped needlessly), `✗` when
+  /// the copy still points elsewhere and only a source-map can help.
+  func copyLines(_ copies: [DSYMCopy]) -> [String] {
+    var lines = ["  dSYMs with this UUID (lldb loads whichever it finds first):"]
+    for (i, copy) in copies.enumerated() {
+      let mark = copy.allFilesFound ? "✓" : "✗"
+      let counts = "\(copy.foundFileCount)/\(copy.sourceFileCount) found"
+      let this = i == 0 ? "  (this one)" : ""
+      lines.append("    \(mark) \(counts)  \(tildeAbbreviated(copy.path))\(this)")
+    }
+    if copies.count == 1 {
+      lines.append("    (no other copies found by Spotlight)")
+    }
+    return lines
+  }
 }
 
 // MARK: - link
