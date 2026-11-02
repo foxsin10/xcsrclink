@@ -113,6 +113,11 @@ enum PathUtil {
     if p.hasPrefix("<") || p.hasPrefix("/<") {
       return true
     }
+    // Swift macro expansion buffers (e.g. `@__swiftmacro_10AppFeature…_.swift`) only
+    // exist inside the compiler, so there's no file to find.
+    if SourcePath(p).components.last?.hasPrefix("@__swiftmacro_") == true {
+      return true
+    }
     let markers = [
       ".sdk/",
       "/Xcode.app/",

@@ -217,6 +217,15 @@ public struct Linker: Sendable {
           example: r.unmatched[0]
         ))
       }
+      // Files already at their recorded path give no mapping, so if nothing else
+      // matched, the binary was built from (or patched to) this checkout.
+      if r.mappings.isEmpty, !r.matched.isEmpty {
+        throw XcsrcLinkError.sourcesAlreadyInPlace(
+          input: input,
+          matchedFiles: r.matched.count,
+          sourceRoot: sourceRoot
+        )
+      }
     }
     mappings = MappingResolver.simplify(mappings)
     guard !mappings.isEmpty else {

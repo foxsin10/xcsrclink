@@ -236,6 +236,11 @@ Each build root gets the local root most of its files agree on. Files that disag
 get their own narrower mapping. Files with several equally good matches are skipped and
 reported; use `--map` for those.
 
+Swift macro expansions (`@__swiftmacro_…` files) appear in the debug info but exist only
+inside the compiler, so `info` and `link` skip them. If every matched file is already at
+its recorded path, because the binary was built from this checkout or is already
+patched, there's nothing to map, and `link` says so instead of linking.
+
 A mapping never reaches above the `--source` folder. With `--source ~/proj/VendorSDK`
 you get `/ci/job/VendorSDK -> ~/proj/VendorSDK`, not `/ci/job -> ~/proj`. This matters
 because lldb also applies source maps in reverse to breakpoints: a mapping that covered
@@ -328,6 +333,10 @@ Check what lldb loaded in Xcode's debug console (⌘⇧Y) while the app is pause
   ✗ copies still have the build machine's paths. Delete them or rebuild their projects,
   then quit and reopen Xcode.
   Linking with `--strategy patch,lldbinit` also covers copies that weren't patched.
+- **`link` says the sources are "already at the paths the binary recorded".** The binary
+  was built from this checkout (or patched to it), so lldb finds the files without a
+  link. If breakpoints still don't bind, the cause is elsewhere: check the dSYM with
+  `image list MyLib`.
 - **"non-launching port is incompatible with service identifier ..."** and similar
   simulator messages are system log noise, unrelated to debugging.
 
