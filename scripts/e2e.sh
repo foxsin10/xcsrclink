@@ -189,6 +189,27 @@ out="$("$X" link "$W/MyLib.xcframework" --map "$W/ci-agent/workspace/builds/job-
 grep -qE "would patch [1-9][0-9]* path string" <<<"$out" && ok "dry run reports patch count" || { bad "dry run"; echo "$out"; }
 cmp -s "$LIB" "$W/pristine.a" && [ ! -s "$INIT" ] && ok "dry run changed nothing" || bad "dry run changed files"
 
+echo "== built from this checkout (with macro expansions)"
+IP="$W/inplace/Sources/Obs"
+mkdir -p "$IP" "$W/inplace/out"
+cat > "$IP/Model.swift" <<'EOF'
+import Observation
+@Observable public final class Model {
+    public var count = 0
+    public init() {}
+}
+EOF
+swiftc -parse-as-library -emit-library -static -g -Onone -module-name Obs \
+  "$IP/Model.swift" -o "$W/inplace/out/libObs.a"
+info="$("$X" info "$W/inplace/out/libObs.a")"
+grep -q "1 source file(s), 1 found" <<<"$info" && ok "info skips macro expansion buffers" || { bad "info counts macro buffers"; echo "$info"; }
+if "$X" link "$W/inplace/out/libObs.a" --source "$W/inplace" --dry-run >"$W/out.txt" 2>"$W/err"; then
+  bad "linking a binary built from this checkout should say there's nothing to do"
+else
+  grep -q "already at the paths the binary recorded" "$W/err" && ! grep -q "swiftmacro" "$W/err" \
+    && ok "link says sources are already in place, no macro warning" || { bad "in-place error"; cat "$W/err"; }
+fi
+
 echo "== command line"
 if "$X" link "$W/MyLib.xcframework" --source "$W/src" ----lldbinit "$INIT" >/dev/null 2>"$W/err"; then
   bad "a misspelled option was accepted"

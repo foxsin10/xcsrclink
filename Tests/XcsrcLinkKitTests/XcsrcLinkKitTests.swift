@@ -23,6 +23,9 @@ struct PathTests {
         "/Applications/Xcode.app/Contents/Developer/Platforms/X.sdk/usr/include/a.h"
       ))
     #expect(PathUtil.isSystemPath("_SwiftConcurrencyShims"))
+    #expect(PathUtil.isSystemPath(
+      "/ci/@__swiftmacro_10AppFeature0027ProfileViewModelswift_ovFAhfMX247_Ll4bindfMf_.swift"
+    ))
     #expect(!PathUtil.isSystemPath("/Users/ci/MyLib/Sources/A.swift"))
   }
 }
@@ -69,6 +72,19 @@ struct ResolverTests {
       "/me/Proj/VendorSDK/Sources/Kit/A.swift",
       "/me/Proj/VendorSDK/Sources/Kit/B.swift"
     ])
+  }
+
+  @Test func filesAlreadyInPlaceMatchButNeedNoMapping() {
+    // Built from this checkout: the files match, but there's nothing to map.
+    let paths = ["/me/Proj/Kit/A.swift", "/me/Proj/Kit/Sub/B.swift"]
+    let r = MappingResolver.resolve(
+      originals: paths,
+      index: index(paths),
+      sourceRoot: SourcePath("/me/Proj/Kit")
+    )
+    #expect(r.mappings.isEmpty)
+    #expect(r.matched.map(\.local) == paths)
+    #expect(r.unmatched.isEmpty)
   }
 
   @Test func widensMappingsForPatching() {

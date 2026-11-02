@@ -13,6 +13,9 @@ public enum XcsrcLinkError: Error, Equatable, Sendable, CustomStringConvertible 
   case missingSourceOrMappings
   /// None of the recorded source files matched a file under `sourceRoot`.
   case noMatchingSources(input: String, recordedFiles: Int, sourceRoot: String)
+  /// Every recorded file that matched under `sourceRoot` is already at its recorded path
+  /// (built from this checkout, or already patched), so there's nothing to map.
+  case sourcesAlreadyInPlace(input: String, matchedFiles: Int, sourceRoot: String)
   /// A scheme given as an `.xcscheme` path doesn't exist.
   case schemeNotFound(path: String)
   /// A scheme given as an `.xcscheme` path isn't inside an `.xcodeproj` or
@@ -54,6 +57,8 @@ public enum XcsrcLinkError: Error, Equatable, Sendable, CustomStringConvertible 
       "no source folder or path mappings given"
     case let .noMatchingSources(_, count, root):
       "couldn't match any of the \(count) recorded source files to files under \(root). Is this the right checkout?"
+    case let .sourcesAlreadyInPlace(_, count, root):
+      "the \(count) source file(s) matched under \(root) are already at the paths the binary recorded, so lldb finds them without a link. Nothing to do."
     case let .schemeNotFound(p):
       "scheme not found: \(p)"
     case let .schemeOutsideProject(p):
