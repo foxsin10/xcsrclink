@@ -236,10 +236,16 @@ Each build root gets the local root most of its files agree on. Files that disag
 get their own narrower mapping. Files with several equally good matches are skipped and
 reported; use `--map` for those.
 
+A match on the file name alone, with no parent folder in common, is weak: SwiftPM
+packages are full of `Exports.swift` and `Macros.swift`. It counts only when at least two
+files, and at least half of the files recorded in that folder, land in the same local
+folder, as they do when a folder was renamed. Otherwise the file counts as unmatched, so
+one shared name can't map a whole module to an unrelated folder.
+
 Swift macro expansions (`@__swiftmacro_…` files) appear in the debug info but exist only
 inside the compiler, so `info` and `link` skip them. If every matched file is already at
 its recorded path, because the binary was built from this checkout or is already
-patched, there's nothing to map, and `link` says so instead of linking.
+patched, there's nothing to map: `link` says so, changes nothing and exits 0.
 
 A mapping never reaches above the `--source` folder. With `--source ~/proj/VendorSDK`
 you get `/ci/job/VendorSDK -> ~/proj/VendorSDK`, not `/ci/job -> ~/proj`. This matters

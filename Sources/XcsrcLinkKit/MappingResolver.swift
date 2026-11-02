@@ -79,7 +79,13 @@ enum MappingResolver {
     sourceRoot: SourcePath? = nil
   ) -> Result {
     var result = Result()
-    struct Pick { let original: SourcePath; let local: SourcePath; let shared: Int }
+    struct Pick {
+      let original: SourcePath
+      let local: SourcePath
+      let shared: Int
+      /// Only the file name matched, no parent folder.
+      var nameOnly = false
+    }
     var picks: [Pick] = []
 
     for raw in originals {
@@ -92,14 +98,55 @@ enum MappingResolver {
       let best = scored.map(\.1).max() ?? 0
       let top = scored.filter { $0.1 == best }
       if top.count > 1 {
-        result.ambiguous.append(raw)
+        // A tie on the file name alone means unrelated files, not a real choice.
+        if best <= 1 {
+          result.unmatched.append(raw)
+        } else {
+          result.ambiguous.append(raw)
+        }
         continue
       }
       var keep = best
       if let root = sourceRoot, top[0].0.hasPrefix(root) {
         keep = min(keep, top[0].0.components.count - root.components.count)
       }
-      picks.append(Pick(original: p, local: top[0].0, shared: keep))
+      picks.append(Pick(
+        original: p,
+        local: top[0].0,
+        shared: keep,
+        nameOnly: best <= 1
+      ))
+    }
+
+    // A match on the file name alone is weak: SwiftPM packages are full of files like
+    // `Macros.swift` and `Exports.swift`. Trust one only when at least two files, and at
+    // least half of those recorded in its folder, land in the same local folder (a
+    // renamed folder). Otherwise one shared name would map a whole module to an
+    // unrelated folder.
+    struct FolderPair: Hashable { let original: SourcePath; let local: SourcePath }
+    var recordedPerFolder: [SourcePath: Int] = [:]
+    for raw in originals {
+      recordedPerFolder[SourcePath(raw).dropLast(1), default: 0] += 1
+    }
+    var landed: [FolderPair: Int] = [:]
+    for pick in picks {
+      landed[
+        FolderPair(original: pick.original.dropLast(1), local: pick.local.dropLast(1)),
+        default: 0
+      ] += 1
+    }
+    picks.removeAll { pick in
+      guard pick.nameOnly else {
+        return false
+      }
+      let folder = pick.original.dropLast(1)
+      let agreeing = landed[FolderPair(original: folder, local: pick.local.dropLast(1))]
+        ?? 0
+      let trusted = agreeing >= 2 && agreeing * 2 >= recordedPerFolder[folder, default: 0]
+      if !trusted {
+        result.unmatched.append(pick.original.string)
+      }
+      return !trusted
     }
 
     // Vote for one local root per build root.

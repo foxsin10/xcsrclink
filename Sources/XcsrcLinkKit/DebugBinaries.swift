@@ -204,7 +204,7 @@ enum DebugBinaryLocator {
 enum SourcePathReader {
   /// Source files recorded in the binary's DWARF, minus Xcode/SDK/compiler paths.
   static func sources(in binary: String) throws -> [String] {
-    let r = try Shell.run("/usr/bin/xcrun", ["dwarfdump", "--show-sources", binary])
+    let r = try Shell.dwarfdump(["--show-sources", binary])
     guard r.status == 0 else {
       throw XcsrcLinkError.toolFailed(
         command: "dwarfdump \(binary)",
@@ -220,6 +220,16 @@ enum SourcePathReader {
       .map { SourcePath($0).string }
       .filter { seen.insert($0).inserted }
       .sorted()
+  }
+
+  /// ``sources(in:)`` for each binary, in the same order, running several dwarfdumps at
+  /// once (a folder of loose object files can hold thousands).
+  static func sources(inEach binaries: [String]) throws -> [[String]] {
+    let results = ResultSlots<[String]>(count: binaries.count)
+    DispatchQueue.concurrentPerform(iterations: binaries.count) { i in
+      results[i] = Result { try sources(in: binaries[i]) }
+    }
+    return try results.values.map { try $0.get() }
   }
 
   /// Groups paths into a few directories that read as "build roots".
@@ -242,4 +252,24 @@ enum SourcePathReader {
       $0.count
     ) }
   }
+}
+
+/// One result per index, filled from concurrent work.
+private final class ResultSlots<Value>: @unchecked Sendable {
+  init(count: Int) {
+    slots = Array(repeating: nil, count: count)
+  }
+
+  /// Every result, once all are filled.
+  var values: [Result<Value, any Error>] {
+    lock.withLock { slots.map { $0! } }
+  }
+
+  subscript(index: Int) -> Result<Value, any Error>? {
+    get { lock.withLock { slots[index] } }
+    set { lock.withLock { slots[index] = newValue } }
+  }
+
+  private let lock = NSLock()
+  private var slots: [Result<Value, any Error>?]
 }

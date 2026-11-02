@@ -43,6 +43,14 @@ public enum XcsrcLinkCLI {
         }
       }
       return 0
+    } catch let e as XcsrcLinkError {
+      // Sources already in place: nothing is wrong, so scripts shouldn't see a failure.
+      if case .sourcesAlreadyInPlace = e {
+        output.print(message(for: e, programName: context.programName))
+        return 0
+      }
+      output.printError("error: \(message(for: e, programName: context.programName))")
+      return 1
     } catch {
       output.printError("error: \(message(for: error, programName: context.programName))")
       return 1

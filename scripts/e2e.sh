@@ -204,10 +204,10 @@ swiftc -parse-as-library -emit-library -static -g -Onone -module-name Obs \
 info="$("$X" info "$W/inplace/out/libObs.a")"
 grep -q "1 source file(s), 1 found" <<<"$info" && ok "info skips macro expansion buffers" || { bad "info counts macro buffers"; echo "$info"; }
 if "$X" link "$W/inplace/out/libObs.a" --source "$W/inplace" --dry-run >"$W/out.txt" 2>"$W/err"; then
-  bad "linking a binary built from this checkout should say there's nothing to do"
+  grep -q "already at the paths the binary recorded" "$W/out.txt" && [ ! -s "$W/err" ] \
+    && ok "link says sources are already in place (exit 0, no warning or error)" || { bad "in-place message"; cat "$W/out.txt" "$W/err"; }
 else
-  grep -q "already at the paths the binary recorded" "$W/err" && ! grep -q "swiftmacro" "$W/err" \
-    && ok "link says sources are already in place, no macro warning" || { bad "in-place error"; cat "$W/err"; }
+  bad "sources already in place should exit 0"; cat "$W/err"
 fi
 
 echo "== command line"
