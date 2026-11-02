@@ -353,7 +353,7 @@ other command-line tools, build scripts or Mac apps:
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/foxsin10/xcsrclink", from: "0.4.0"),
+.package(url: "https://github.com/foxsin10/xcsrclink", from: "0.4.1"),
 // in your target's dependencies:
 .product(name: "XcsrcLinkKit", package: "xcsrclink"),
 ```
