@@ -55,7 +55,7 @@ public extension Linker {
 enum DSYMLocator {
   /// The UUIDs (one per architecture) of a Mach-O or DWARF file.
   static func uuids(of file: String) -> [String] {
-    guard let r = try? Shell.run("/usr/bin/xcrun", ["dwarfdump", "--uuid", file]),
+    guard let r = try? Shell.dwarfdump(["--uuid", file]),
           r.status == 0 else {
       return []
     }

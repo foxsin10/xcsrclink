@@ -111,6 +111,39 @@ struct ResolverTests {
     #expect(r.mappings == [PathMapping(from: "/ci/MyLib/Sources", to: "/me/MyLibSrc")])
   }
 
+  @Test func oneSharedFileNameDoesNotMapAFolder() {
+    // Several SwiftPM modules record only Exports.swift and Macros.swift; the app's
+    // Networking folder happens to have a Macros.swift too.
+    let deps = "/b/checkouts"
+    let originals = [
+      "\(deps)/swift-perception/Sources/Perception/Exports.swift",
+      "\(deps)/swift-perception/Sources/Perception/Macros.swift",
+      "\(deps)/swift-structured-queries/Sources/StructuredQueries/Macros.swift",
+      "\(deps)/swift-structured-queries/Sources/StructuredQueriesSQLite/Exports.swift",
+      "\(deps)/swift-structured-queries/Sources/StructuredQueriesSQLite/Macros.swift",
+      "/me/App/Sources/Networking/Macros.swift",
+      "/me/App/Sources/Networking/Client.swift"
+    ]
+    let r = MappingResolver.resolve(
+      originals: originals,
+      index: index([
+        "/me/App/Sources/Networking/Macros.swift",
+        "/me/App/Sources/Networking/Client.swift",
+        // Two local Exports.swift tie on the name alone: no match, not ambiguous.
+        "/me/App/Sources/Networking/Exports.swift",
+        "/me/App/Sources/Storage/Exports.swift"
+      ]),
+      sourceRoot: SourcePath("/me/App/Sources")
+    )
+    #expect(r.mappings.isEmpty)
+    #expect(r.matched.map(\.original) == [
+      "/me/App/Sources/Networking/Macros.swift",
+      "/me/App/Sources/Networking/Client.swift"
+    ])
+    #expect(r.unmatched.count == 5)
+    #expect(r.ambiguous.isEmpty)
+  }
+
   @Test func prefersLongestSharedTailAndReportsAmbiguity() {
     let r = MappingResolver.resolve(
       originals: [
@@ -122,8 +155,8 @@ struct ResolverTests {
         "/me/X/Core/Util.swift",
         "/me/X/Legacy/Util.swift",
         "/me/X/UI/View.swift",
-        "/me/a/Dup.swift",
-        "/me/b/Dup.swift"
+        "/me/a/Other/Dup.swift",
+        "/me/b/Other/Dup.swift"
       ])
     )
     #expect(r.mappings == [PathMapping(from: "/ci", to: "/me")])

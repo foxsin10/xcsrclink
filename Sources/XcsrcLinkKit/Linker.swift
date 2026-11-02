@@ -138,10 +138,11 @@ public struct Linker: Sendable {
   public func inspect(_ input: String) throws -> Inspection {
     try Self.requireExists(input)
     let located = DebugBinaryLocator.locate(input)
-    var sources: [DebugBinary: [String]] = [:]
-    for b in located.binaries {
-      sources[b] = try SourcePathReader.sources(in: b.path)
-    }
+    let found = try SourcePathReader.sources(inEach: located.binaries.map(\.path))
+    let sources = Dictionary(
+      zip(located.binaries, found),
+      uniquingKeysWith: { first, _ in first }
+    )
     return Inspection(
       binaries: located.binaries,
       sources: sources,
